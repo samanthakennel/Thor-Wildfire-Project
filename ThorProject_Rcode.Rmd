@@ -1,0 +1,3714 @@
+---
+title: "Thor_Rcode"
+output:
+  pdf_document: default
+  word_document: default
+date: "2026-07-17"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Project Summary: 
+The Thor wildfire burned in July 2022 to September 2022 in the Colville National Forest, approximately 6 miles east of Metaline Falls, Washington, and was managed using limited suppression methods. The fire affected a remote landscape that had not experienced wildfire in more than a century, providing an opportunity to evaluate post-fire forest conditions following prolonged fire exclusion.Eastern Washington University and Washington Department of Natural Resources collaborated to identify the response of forest ecology to managed wildfire.As wildfire frequency and severity increase across the Inland Northwest, land managers are increasingly interested in both reducing wildfire hazard through active management and understanding when wildfire itself may function as a restoration tool. However, it remains unclear whether individual wildfire events produce beneficial or detrimental ecological outcomes, particularly in forests that have experienced extended periods of fire suppression. To assess post-fire forest ecology, 100 stratified monitoring plots were established within burned and adjacent unburned forests. Standardized forest structure and fuel measurements were collected using the 2024 Washington Department of Natural Resources Forest Health Monitoring Protocol.Differences between burned and unburned sites were evaluated using generalized linear models and nonparametric hypothesis tests while accounting for environmental covariates to isolate the effects of wildfire. 
+
+All Libraries:
+```{r}
+library(readxl)
+library(dplyr)
+library(tidyr)
+library(tidyverse)
+library(effects)
+library(sf)
+library(emmeans)
+library(ggplot2)
+library(vegan)
+library(car)
+library(MuMIn)
+library(glmmTMB)
+library(DHARMa)
+library(ggeffects)
+library(pscl)
+library(ordinal)
+library(indicspecies)
+library("patchwork")
+library(cluster)
+options(contrasts = c("contr.sum", "contr.poly"))
+```
+
+
+Data Cleaning:
+Data was collected using the Forest Health Monitoring datasheet V6 on Survey123 and exported as an excel file. In the first step of data cleaning I imported each excel data sheet as an individual data set. Additionally, I imported fire severity and elevation data. Elevation data were extracted from a Digital Elevation Model (USGS, n.d.) and wildfire severity values for each plot were calculated following methods of Parks et al.(2018), extracted from the WA DNR burn severity raster (WA DNR Forest Resiliency Division, 2025). Slope was measured on plot, however, slope was not recorded on two plots and for these plots the DEM was referenced and slope values were manually added to the data set. Within each data set missing data and errors were investigated through referencing photos taken at each plot and utilizing logic. The protocol says to document and record data for each individual tree within the 37.2ft radius plot. However, it was infeasible to do so for some plots that had more than 30 trees on plot. Therefore, in those high density plots we recorded trees in two diagonal quadrants.A new column was added where I noted whether or not the tree data was recorded in a split plot. 
+
+```{r}
+# Import each sheet into individual datasets
+Monitoring <- read_excel("Thor_2025_survey_results.xlsx", sheet = "Monitoring")
+Recruitment <- read_excel("Thor_2025_survey_results.xlsx", sheet = "Tree < 5in 11.8ft plot")
+largetrees <- read_excel("Thor_2025_survey_results.xlsx", sheet = "Fixed radius plot")
+Photoloading<- read_excel("Thor_2025_survey_results.xlsx", sheet = "Photoload_small")
+logs<- read_excel("Thor_2025_survey_results.xlsx", sheet = "Photoload_large")
+litterduff<- read_excel("Thor_2025_survey_results.xlsx", sheet = "litter_duff_transects")
+canopy<- read_excel("Thor_2025_survey_results.xlsx", sheet = "Canopy_Cover")
+
+FireSeverity<-read.csv("THOR_severity.csv")
+Elevation<-read.csv("ElevationPlots.csv")
+     
+
+##standardize the column name of GlobalID
+ Monitoring<- Monitoring %>%
+rename("ParentGlobalID" = GlobalID)
+FireSeverity<-FireSeverity%>%
+rename("ParentGlobalID" = globalid)
+Elevation<-Elevation%>%
+rename("ParentGlobalID" = globalid)
+
+##re-format PlotID names
+Monitoring <- Monitoring %>%
+mutate(PlotID = PlotID %>% 
+str_replace_all("^Thor_", "") %>% #Remove any "THOR_" or any other 
+str_replace_all("[\\p{Pd}.\\s]+", "_") %>% 
+str_to_upper() %>% # 2. Convert to uppercase
+str_replace_all("_+", "_") %>% #Remove any duplicate underscores (e.g. "__" -> "_")
+str_replace_all("^_|_$", "")%>%    #Trim leading/trailing underscores if any
+str_replace_all("^([A-Z])(?=[A-Z])", "\\1_")) #Insert underscore after first letter if missing
+          
+Recruitment <- Recruitment %>%
+mutate(PlotID = PlotID %>% 
+str_replace_all("^Thor_", "") %>% 
+str_replace_all("[\\p{Pd}.\\s]+", "_") %>% 
+str_to_upper() %>% 
+str_replace_all("_+", "_") %>% 
+str_replace_all("^_|_$", "")%>%
+str_replace_all("^([A-Z])(?=[A-Z])", "\\1_")) 
+
+Photoloading <- Photoloading %>%
+mutate(PlotID = PlotID %>% 
+str_replace_all("^Thor_", "") %>%
+str_replace_all("[\\p{Pd}.\\s]+", "_") %>%
+str_to_upper() %>%
+str_replace_all("_+", "_") %>% 
+str_replace_all("^_|_$", "")%>%
+str_replace_all("^([A-Z])(?=[A-Z])", "\\1_"))
+
+logs <- logs %>%
+mutate(PlotID = PlotID %>% 
+str_replace_all("^Thor_", "") %>% 
+str_replace_all("[\\p{Pd}.\\s]+", "_") %>% 
+str_to_upper() %>%
+str_replace_all("_+", "_") %>% 
+str_replace_all("^_|_$", "")%>% 
+str_replace_all("^([A-Z])(?=[A-Z])", "\\1_"))
+
+litterduff <- litterduff %>%
+mutate(PlotID = PlotID %>% 
+str_replace_all("^Thor_", "") %>% 
+str_replace_all("[\\p{Pd}.\\s]+", "_") %>%
+str_to_upper() %>%
+str_replace_all("_+", "_") %>% 
+str_replace_all("^_|_$", "")%>% 
+str_replace_all("^([A-Z])(?=[A-Z])", "\\1_"))
+
+largetrees <- largetrees %>%
+mutate(PlotID = PlotID %>% 
+str_replace_all("^Thor_", "") %>% 
+str_replace_all("[\\p{Pd}.\\s]+", "_") %>% 
+str_to_upper() %>% 
+str_replace_all("_+", "_") %>% 
+str_replace_all("^_|_$", "")%>%   
+str_replace_all("^([A-Z])(?=[A-Z])", "\\1_"))
+
+canopy <- canopy %>%
+mutate(PlotID = PlotID %>% 
+str_replace_all("^Thor_", "") %>%
+str_replace_all("[\\p{Pd}.\\s]+", "_") %>%
+str_to_upper() %>% 
+str_replace_all("_+", "_") %>%
+str_replace_all("^_|_$", "")%>%
+str_replace_all("^([A-Z])(?=[A-Z])", "\\1_"))
+
+##check for duplicates
+table(Monitoring$PlotID)
+#There were two B_SC3_35 and upon investigation on the map using the X Y coordinates, I confirmed that the survey on 7/29/2025 globalID: 940b702c-e196-4476-8b2e-7a7c59d270a2 was actually a typo and this is plot U_SC3_35.I went through and changed the PlotID. 
+
+Monitoring <- Monitoring %>%
+  mutate(PlotID = if_else(ParentGlobalID == "940b702c-e196-4476-8b2e-7a7c59d270a2", "U_SC3_35", PlotID))
+
+Recruitment <- Recruitment %>% 
+  mutate(PlotID = if_else(ParentGlobalID == "940b702c-e196-4476-8b2e-7a7c59d270a2","U_SC3_35",
+PlotID))
+
+Photoloading <- Photoloading %>%
+         mutate(PlotID = if_else(ParentGlobalID == "940b702c-e196-4476-8b2e-7a7c59d270a2","U_SC3_35", PlotID))
+
+logs <- logs %>%
+       mutate(PlotID = if_else(ParentGlobalID == "940b702c-e196-4476-8b2e-7a7c59d270a2","U_SC3_35",PlotID))
+ 
+litterduff <- litterduff %>%
+        mutate(PlotID = if_else(ParentGlobalID == "940b702c-e196-4476-8b2e-7a7c59d270a2",
+        "U_SC3_35",PlotID))
+
+largetrees <- largetrees %>%
+  mutate(PlotID = if_else(ParentGlobalID == "940b702c-e196-4476-8b2e-7a7c59d270a2","U_SC3_35",  PlotID))
+
+canopy <- canopy %>%
+     mutate(PlotID = if_else(ParentGlobalID == "940b702c-e196-4476-8b2e-7a7c59d270a2","U_SC3_35",
+PlotID))
+
+Monitoring %>%
+  mutate(is_duplicate = duplicated(PlotID) | duplicated(PlotID, fromLast = TRUE)) %>%
+  filter(is_duplicate) %>%
+  arrange(PlotID)
+
+#Deleted all data for ID: 2d729567-36e9-4bc1-aa5f-be4d2e84c632, duplicate
+#8/8/2024 U_SC2_11 global ID: e88e548b-7864-4ffe-8b01-80323e3fe502 was incomplete. Re-sampled 7/13/2025 global ID: 0127544b-963c-4b34-bdc6-1091aa53f1e4. I will remove the data for the incomplete plot e88e548b-7864-4ffe-8b01-80323e3fe502.
+#Sampled the same plot in 2024 and 2025. 8/6/2024 B_SC2_12 globalID: fc36ed73-becd-4237-93c7-1aff8a47d180, 8/19/2025 B_SC2_12 globalID: 7b8599e4-ad89-4fdb-9a0c-b5d2cd1dbb3d. 2024 since the collector was different and most plots were sampled in 2025. 
+
+duplicates_to_remove <- c(
+        "2d729567-36e9-4bc1-aa5f-be4d2e84c632",
+         "e88e548b-7864-4ffe-8b01-80323e3fe502",
+         "fc36ed73-becd-4237-93c7-1aff8a47d180")
+Monitoring <- Monitoring %>%
+       filter(!(ParentGlobalID %in% duplicates_to_remove))
+Recruitment <- Recruitment %>%
+       filter(!(ParentGlobalID %in% duplicates_to_remove))
+Photoloading <- Photoloading %>%
+       filter(!(ParentGlobalID %in% duplicates_to_remove))
+logs <- logs %>%
+      filter(!(ParentGlobalID %in% duplicates_to_remove))
+litterduff <- litterduff %>%
+      filter(!(ParentGlobalID %in% duplicates_to_remove))
+largetrees <- largetrees %>%
+      filter(!(ParentGlobalID %in% duplicates_to_remove))
+canopy <- canopy %>%
+       filter(!(ParentGlobalID %in% duplicates_to_remove))
+FireSeverity <- FireSeverity %>%
+       filter(!(ParentGlobalID %in% duplicates_to_remove))
+Elevation <- Elevation %>%
+       filter(!(ParentGlobalID %in% duplicates_to_remove))
+
+#Fill in PlotID gaps by matching with the GlobalID and ensure all 100 plots are represented in each dataset
+all_plots <- Monitoring %>% #create a look up table with the correct ParentGlobalID-PlotID pairs. 
+       select(ParentGlobalID, PlotID) %>%
+       filter(!is.na(PlotID) & PlotID != "") %>%
+       distinct(ParentGlobalID, PlotID)
+
+ Recruitment <- Recruitment %>%
+       left_join(all_plots, by = "ParentGlobalID", suffix = c("", "_filled")) %>%
+       mutate(PlotID = coalesce(PlotID, PlotID_filled)) %>%
+       select(-PlotID_filled) %>%
+       right_join(all_plots, by = "PlotID")
+Photoloading <- Photoloading %>%
+       left_join(all_plots, by = "ParentGlobalID", suffix = c("", "_filled")) %>%
+       mutate(PlotID = coalesce(PlotID, PlotID_filled)) %>%
+       select(-PlotID_filled) %>%
+       right_join(all_plots, by = "PlotID")
+logs <- logs %>%
+     left_join(all_plots, by = "ParentGlobalID", suffix = c("", "_filled")) %>%
+     mutate(PlotID = coalesce(PlotID, PlotID_filled)) %>%
+     select(-PlotID_filled) %>%
+     right_join(all_plots, by = "PlotID")
+litterduff <- litterduff %>%
+        left_join(all_plots, by = "ParentGlobalID", suffix = c("", "_filled")) %>%
+        mutate(PlotID = coalesce(PlotID, PlotID_filled)) %>%
+        select(-PlotID_filled) %>%
+        right_join(all_plots, by = "PlotID")
+largetrees <- largetrees %>%
+       left_join(all_plots, by = "ParentGlobalID", suffix = c("", "_filled")) %>%
+       mutate(PlotID = coalesce(PlotID, PlotID_filled)) %>%
+       select(-PlotID_filled) %>%
+       right_join(all_plots, by = "PlotID")
+canopy <- canopy %>%
+        left_join(all_plots, by = "ParentGlobalID", suffix = c("", "_filled")) %>%
+        mutate(PlotID = coalesce(PlotID, PlotID_filled)) %>%
+        select(-PlotID_filled) %>%
+        right_join(all_plots, by = "PlotID")
+
+FireSeverity <- FireSeverity %>%
+      left_join(all_plots, by = "ParentGlobalID")
+      Elevation <- Elevation %>%
+      left_join(all_plots, by = "ParentGlobalID")
+      
+## Plot Information datacleaning
+       
+##Live Fuel Height was supposed to be in inches but I thought it was feet for several plots.... I changed every number less than 10 to its corresponding conversion in inches because it is more likely to be in feet than in inches since the live fuel ranged from 1-10 feet tall. 
+#missing slope data. With arcGISPro I used a DEM to derive slope across the survey area. I then overlayed the exact plot locations from Survey123 and determined the slope of the area that plot was in. 
+#missing aspect data. Looking at the map, determine which cardinal direction the slope was facing.
+#missing live fuel height data for U_SC2_8 and estimated average height visually with photos
+PlotInformation <- Monitoring %>%
+       select(
+       PlotID,
+       "Date" = "Inventory Date",
+       "Slope" = "Average percent of slope within plot",
+       "Aspect" = "Predominant aspect of the plot",
+       "Azimuth" = "Plot Azimuth",
+       "Soil Disturbance" = "Soil disturbance",
+       "Stand Height (ft.)" = "Stand Height",
+       "Live Fuel Height (in.)" = "Average Canopy Fuel Base Height",
+        x, y) %>%
+        mutate(
+        `Live Fuel Height (in.)` = case_when(
+         `Live Fuel Height (in.)` == 1 ~ 12,
+          `Live Fuel Height (in.)` == 2 ~ 24,
+          `Live Fuel Height (in.)` == 3 ~ 36,
+           `Live Fuel Height (in.)` == 4 ~ 48,
+           `Live Fuel Height (in.)` == 5 ~ 60,
+          `Live Fuel Height (in.)` == 6 ~ 72,
+          `Live Fuel Height (in.)` == 7 ~ 84,
+         `Live Fuel Height (in.)` == 8 ~ 96,
+          `Live Fuel Height (in.)` == 9 ~ 108,
+           TRUE ~ `Live Fuel Height (in.)`))%>%
+        mutate(across(c("Live Fuel Height (in.)"), as.numeric))%>%
+        mutate(Slope = case_when(
+           PlotID == "B_SC3_2" ~ 60,
+           PlotID == "U_SC3_17" ~ 33,
+            TRUE ~ Slope))%>%
+        mutate(
+         Aspect = case_when(
+            PlotID == "U_SC3_9" ~ "S",
+            PlotID %in% c("U_SC3_17","U_SC3_24") ~ "SW",
+            PlotID %in% c("B_SC3_21","B_SC3_12", "U_SC3_37") ~ "W",
+            PlotID == "U_SC2_10" ~ "NW",
+            TRUE ~ Aspect))%>%
+  mutate(`Live Fuel Height (in.)`= case_when(PlotID=="U_SC2_8"~2, TRUE ~ `Live Fuel Height (in.)`))
+
+#vegetation plot level
+vegetation <- Monitoring %>%
+        select(
+          PlotID,
+          "Date"="Inventory Date",
+          "Shrub"= "Vegetation - shrubs",
+          "Forb" = "Vegetation - herbaceous",
+          "Grass"="Vegetation - grass",
+          "Invasive"="Invasive Plants")
+
+  
+#Recruitment 
+#For B_SC3_6 there were a few blank rows which resembled extra data sheets added; these rows were deleted.
+#ObjectID 1499 had a species (THPL) recorded but no abundance data associated with it. This is due to an error in assuming THPL seedlings would be present but none were found within the 11.8ft radius plot. 
+#objectID 1104 there was no data recorded which suggests no seedlings or saplings were detected in the 11.8ft radius plot.
+Recruitment <- Recruitment %>%
+      filter(!ObjectID %in% c(1208, 1499, 1104)) %>%  # Remove blank data
+      mutate(Species = if_else(ObjectID %in% c(1106, 1108), "unknown", Species))
+
+#seperate recruitment into two seperate data sheets "seedlings" and "saplings"
+Seedling <- Recruitment %>%
+       filter(`Seedling or Sapling?` == "seedling") %>%
+       select(
+       PlotID,
+       Species,
+       Abundance,
+       Seedling = `Seedling or Sapling?`) %>%
+       right_join(all_plots, by = "PlotID")
+Sapling <- Recruitment %>%
+       filter(`Seedling or Sapling?` == "sapling") %>%
+       select(
+       PlotID,
+       Species,
+       Count,
+       Sapling = `Seedling or Sapling?`) %>%
+       right_join(all_plots, by = "PlotID")
+
+
+#Large Trees (>5in.DBH) cleaning
+largetrees <- largetrees %>%
+  mutate(`Bole Char` = as.numeric(`Bole Char`)) %>%
+  mutate(
+    `Bole Char` = if_else(
+      str_starts(PlotID, "U_") & is.na(`Bole Char`),
+      0,`Bole Char`)) %>%
+  mutate(Species = if_else(str_starts(Species, "Un"), "Unknown", Species)) %>%
+        select(PlotID, Species, DBH, "Status" = `Tree Status Code`,
+               `Snag class`, `Forest strata`, `Tree Height`,
+                `Live Crown Ratio`, `Bole Char`)
+  
+# Split Plots
+split_plots <- c(
+           "U_SC3_7",  "U_SC3_1",  "U_SC3_3",  "U_SC3_18", "U_SC3_4",  "U_SC8_4",  
+           "U_SC3_33", "B_SC3_6",  "B_SC3_23", "B_SC3_13", "B_SC2_16", "B_SC2_13", 
+        "B_SC2_11", "B_SC3_21", "B_SC3_17", "B_SC3_28", "B_SC3_38", "B_SC2_15", 
+          "B_SC2_7",  "U_SC3_13", "U_SC3_21", "U_SC3_25", "U_SC3_32", "U_SC3_5",  
+         "U_SC8_2",  "B_SC2_3",  "U_SC2_10", "U_SC2_9",  "B_SC2_8",  "B_SC3_33", 
+         "U_SC2_8",  "B_SC2_17", "B_SC2_4",  "U_SC2_17", "U_SC2_19", "B_SC2_5",  
+        "U_SC3_9",  "B_SC3_22")
+
+largetrees <- largetrees %>%
+        mutate(treesplit = if_else(PlotID %in% split_plots, "Y", "N"))
+      
+##checking for missing data
+#hist(largetrees$DBH)
+#hist(largetrees$`Tree Height`)
+#hist(largetrees$`Bole Char`)
+
+#litter and duff cleaning
+#hist(litterduff$`Litter depth at 0'`)
+#hist(litterduff$`Duff depth at 0'`)
+#hist(litterduff$`Litter depth at 25'`)
+#hist(litterduff$`Duff depth at 25'`)
+#hist(litterduff$`Litter depth at 50'`)
+#hist(litterduff$`Litter depth at 74'`)
+#hist(litterduff$`Duff depth at 74'`)
+
+#At B_SC2_3 the litter depth at 50 was 145026.0. this is clearly a typo. Other values of litter along the transect were 0.5. Therefore, the value should be changed to 0.5.
+#At U_SC3_33 the Duff depth at 0 was 33. this is clearly a typo. Other values of duff along the transect were 3.0. Therefore, the value should be changed to 3.0.
+
+litterduff <- litterduff %>%
+       select(PlotID, "Litter depth at 0'","Duff depth at 0'","Litter depth at 25'","Duff depth at 25'","Litter depth at 50'","Duff depth at 50'","Litter depth at 74'","Duff depth at 74'")%>%
+       mutate(`Litter depth at 50'`  = if_else(
+         PlotID == "B_SC2_3" &`Litter depth at 50'` == 145026.0,0.5,`Litter depth at 50'`))%>%
+       mutate(`Duff depth at 0'`= if_else(
+         PlotID == "U_SC3_33" &`Duff depth at 0'` == 33, 3.0,`Duff depth at 0'`))%>%
+       mutate(across(
+          where(is.numeric),
+         ~ if_else(PlotID == "B_SC3_14", replace_na(., 0), .)))%>%
+  mutate(across(
+         where(is.numeric), ~ round(. / 0.5) * 0.5))
+
+#Canopy
+NoCanopy <- c(
+"U_SC8_1", "B_SC3_12","B_SC3_26","B_SC2_6","B_SC2_14","B_SC3_2","B_SC3_24","B_SC8_3","B_SC3_13","B_SC2_16","B_SC3_18","B_SC2_13","B_SC2_11","B_SC3_17","B_SC2_13","B_SC3_19") #verified plots that were missing canopy but were marked having canopy using survey photos
+canopy <- canopy %>%
+   filter(`Hits or Misses` != "NA")%>% #remove NA, rows that are blank were extra sheet added on survey123.
+  select(
+   PlotID,
+    HM = `Hits or Misses`) %>%
+ mutate(
+     HM = if_else(PlotID %in% NoCanopy, "miss", HM))
+## Missing data for U_SC3_1 and there is canopy cover present on this plot
+
+
+#logs cleaning
+##U_SC2_10 has a missing value for "sound or rotten". This hardly effects the equation with a difference in specific gravity constant where sound = 0.4 and rotten= 0.3. This logs data should still be retained as it is important for calculating "n" number of intersections. Therefore, I will claim this log is sound for analysis but make sure to note this in the discussion. 
+##B_SC3_19 has one log missing the length! I will leave it as an NA because it appears that the length of the individual log is not used in calculations 
+## B_SC3_12 length is 260.. should be 60. Verified with largetrees data on plot, trees were around 60ft. tall so it is likely this is a typo and I meant to type 60. 
+##B_SC3_12 diameter is 50.6, the log length is 32.3 feet so this is a typo, it should be 5.6in 
+logs<-logs%>%
+  select(PlotID, 
+         "Decay"='Sound or rotten',
+         "Diameter"= "DBH", Length)%>%
+  mutate(Decay = na_if(Decay, "na"))%>%
+  right_join(all_plots, by = "PlotID")%>%
+  mutate("Decay"=if_else(
+    PlotID == "U_SC2_10" & is.na(Decay), "sound", Decay))%>%
+  mutate(
+    across(c(Diameter, Length), as.numeric),
+    Decay = as.character(Decay))%>%
+  mutate(Length=if_else(
+    PlotID == "B_SC3_12" & Length ==260, 60, Length))%>%
+  mutate(Diameter =if_else(
+    PlotID == "B_SC3_12" & Diameter ==50.6, 5.6, Diameter))
+
+#Photoloading 
+## Typos in values. 
+#U_SC8_1 forb reference height was 120.2 for one quadrat and the other quadrat was 12. Therefore I assume this is a typo and the value was meant to be 12 since 120.2 is not a true reference height. #B_SC3_11 forb observed height was 120.2 for one quadrat and the other quadrat was 12. Therefore I assume this is a typo and the value was meant to be 12 since forbs were not anywhere close to 312 inches tall. 
+#B_SC3_30 forb reference height was 22 for one quadrat and the other quadrat was 12. Therefore I assume this is a typo and the value was meant to be 12 since 22 is not a true reference height. 
+#U_SC3_34 one hour fuel load for quadrat 1= 0.32 but 2 is 45.00. This is a typo and 45.00 is not a real loading on the refernce sheet. This value was a typo and should be 0.45. 
+
+Photoloading<-Photoloading%>%
+  select(
+    PlotID,
+    "one" = "1-hr Dead Fuels",
+    "ten"= "10-hr Dead Fuels",
+    "hundred" = "100-hr Dead Fuels",
+    "shrub" = "Shrubs",
+    "grass" = "Grass",
+    "forb" = "Forb",
+    "DecayClass"= "100-hr Decay Class",
+    "shrub_height.ref" = "Reference shrub height",
+    "shrub_height.obs" = "Observed Shrub height",
+    "grass_height.ref" = "Reference grass height",
+    "grass_height.obs" = "Observed grass height",
+    "forb_height.ref" = "Reference forb height",
+    "forb_height.obs" = "Observed forb height") %>%
+  mutate(
+    hundred = replace_na(hundred, 0),
+    DecayClass = replace_na(DecayClass, "0"),  # Replace NA with character "0"
+    shrub_height.ref = if_else(shrub_height.obs == 0, 0, shrub_height.ref),  
+    grass_height.ref = if_else(grass_height.obs == 0, 0, grass_height.ref),
+    forb_height.ref = if_else(forb_height.obs == 0, 0, forb_height.ref))%>% 
+  mutate(forb_height.ref= if_else(
+    PlotID == "U_SC8_1" & forb_height.ref == 120.2, 12.0,forb_height.ref))%>%
+  mutate(forb_height.obs=if_else(
+    PlotID == "B_SC3_11" & forb_height.obs == 312.0, 12.0, forb_height.obs))%>%
+  mutate(forb_height.ref=if_else(
+    PlotID == "B_SC3_30" & forb_height.ref ==22, 12, forb_height.ref))%>%
+  mutate(`one`=if_else(PlotID == "U_SC3_34" & `one` ==45.00, 0.45, `one`))
+
+#final Df
+Thor_data<-PlotInformation %>%
+  select(PlotID,Date, Slope, Aspect, "Soil Disturbance", "Stand Height (ft.)", "Live Fuel Height (in.)", x,y)%>%
+  mutate(
+    Treatment = case_when(
+      str_starts(PlotID, "B_") ~ "B",
+      str_starts(PlotID, "U_") ~ "U"))%>%
+ mutate("Treatment"= if_else(PlotID == "U_SC8_1" & Treatment == "U", "B",Treatment))%>%
+ mutate(SiteClass = str_extract(PlotID, "(?<=SC)\\d+"))
+
+#add burned and unburned treatment column 
+#Change treatment from unburned to burned for U_SC8_1 because all trees were severely burned.
+
+
+## Label wildfire severity and merge into final data frame
+
+#No-severity level is considered to be outside the burn perimeter (unburned sites) an not severely burned 
+#U_SC8_1 (Treatment=B) is severely burned but <NULL> because it is on the edge of the burn
+#B_SC2_10 and B_SC2_8 on the edge of the burn and severity level is <NULL>. marked as NA
+#B_SC3_27 signs of high wildfire severity but the RASTERVALU is <NULL> likely because it is on the edge of the burn. marked as NA.
+#U_SC3_24 has a RASTERVALU because there is a 100-year old wildfire that occurred within the 1km buffer. I clipped the severity raster to the 1km buffer. For my maps I did remove this area and clipped to only the Thor wildfire perimeter but for analysis I will just remove this point because it is unburned. marked as 0 because it was not burned by Thor. (and the fire was 100 years ago)
+##NA's will remain for creating the final data frame but will be removed before analysis.
+
+FireSeverity <- FireSeverity %>%
+  mutate(
+    RASTERVALU = case_when(
+      PlotID == "U_SC8_1" ~ NA_real_,
+      grepl("^U_", PlotID) ~ 0,
+      TRUE ~ RASTERVALU),
+    Severity = case_when(
+      RASTERVALU == 0 ~ "No",
+      RASTERVALU > 0 & RASTERVALU <= 1 ~ "Low",
+      RASTERVALU > 1 & RASTERVALU <= 2 ~ "Medium",
+      RASTERVALU > 2 & RASTERVALU <= 3 ~ "High",
+      RASTERVALU > 3 & RASTERVALU <= 4 ~ "Extreme",
+      TRUE ~ NA_character_))
+
+Thor_data <- Thor_data %>%
+  left_join(
+    FireSeverity %>%
+      distinct(PlotID, .keep_all = TRUE) %>%
+      select(PlotID, Severity),
+    by = "PlotID")
+
+#merge elevation to final data frame 
+Thor_data <- Thor_data %>%
+ left_join(Elevation %>% 
+      select(PlotID, Elevation),
+   by = "PlotID" )
+
+#merge vegetation to final data frame 
+Thor_data <- Thor_data %>%
+  left_join(
+   vegetation %>% 
+      select(PlotID, Shrub,Forb,Grass,Invasive),
+    by = "PlotID" )
+
+Thor_data <- Thor_data %>%
+      mutate(
+      Treatment = as.factor(Treatment),
+      SiteClass = as.factor(SiteClass),
+      Severity = as.factor(Severity),
+      Slope = as.numeric(Slope))
+
+Thor_data <- Thor_data %>%
+  mutate(Treatment = factor(Treatment, levels = c("U", "B")),
+         Severity = factor(Severity),
+         SiteClass = factor(SiteClass))
+
+```
+
+Calculations and data transformation:
+A series of calculations were performed to gain interpretable plot-level estimates of each parameter. Firstly, I estimated 1-, 10-, and 100-hour fuels according to the methods for Photoloading outlined in Keane and Dickinson (2007) and averaged each value between the two sub-samples taken at each plot. Additionally, 100-hour fuels were assigned to decay class, because decay can alter the volume of fuels in larger fine woody debris, and these volumes were multiplied by a constant associated with each decay class. Living shrub cover and herbaceous cover also contribute to fuel load and can be estimated using similar Photoloading methods (Keane and Dickinson, 2007). Shrub, forb, and grass loads were each corrected for height by multiplying by a ratio of the observed height (i.e., an integrated average height of the material in the quadrat) to a Photoloading reference height.  Next, following the Brown (1994) protocol, the volume of 1000-hour fuels was calculated from data on log diameter and decay class, incorporating slope as well.Additionally I calculated the log abundance as the total number of logs recorded along the two modified browns transects. A plot-level litter and duf depth average was taken accross the four equidistant sub-samples.Canopy cover was recorded as a series of hits or misses along the central transect. Therefore the plot-level estimate of canopy cover was calculated by counting the numbers of hits and misses in each plot and taking the proportion of hits to misses within that plot. I calculated the basal area for all mature trees (>5 in diameter at breast height, DBH) using the standard forestry equation (0.005454*DBH2). Individual tree basal areas were summed within each plot and scaled to a per-acre basis by multiplying by 10 for 1/10-acre plots and 20 for split plots. I determined tree mortality (as a proportion) by dividing the basal area of dead trees by the total basal area of the plot. Plots with no trees or those containing unidentified specimens were excluded from the analysis. Tree recruitment was estimated in a 11.8 foot sub-plot (1/100th acre; hereafter small-radius plot; Fig. 3) by quantifying seedling and sapling abundance by species within the small-radius plot. Seedlings were assigned categorical ranges (few: 0-10, moderate: 11-20, and many: > 20), and I selected the range midpoint for analysis. Recruitment abundances by species were summed together to get an overall plot-level abundance estimate. Finally, to calculate tree alpha diversity I created a tree by species matrix and calculated Shannon-based Hill numbers (q = 1), which represent the effective number of species, integrating both richness and evenness, with “q” controlling sensitivity to rare species; at q = 1, diversity reflects proportional species abundances (Roswell et al., 2021). In addition, I calculated the alpha diversity of just live trees and included new recruitment (seedlings and saplings). 
+
+```{r}
+# Fuel Load Calculations
+## 1,10 fuel
+small_load<-Photoloading%>%
+  select(PlotID,one,ten)%>%
+  group_by(PlotID)%>%
+  summarise(onehour=mean(one,na.rm=TRUE),
+            tenhour=mean(ten,na.rm=TRUE))
+
+#merge to final data frame
+Thor_data <- Thor_data %>%
+  left_join(
+    small_load %>% 
+      select(PlotID, onehour, tenhour),
+    by = "PlotID" )
+
+#100 hour fuels
+# decay class 1 and 2 no need to adjust for decay, so multiply by a factor of 1?
+## Adjust for degree of decay (class 3-5). 3-0.90 4-0.75 0.5
+large_load <- Photoloading %>%
+  select(PlotID, hundred, DecayClass)%>%
+  mutate(
+    DecayFactor = case_when(
+      DecayClass == 0 ~ 1.00,
+      DecayClass == 1 ~ 1.00,
+      DecayClass == 2 ~ 1.00,
+      DecayClass == 3 ~ 0.90,
+      DecayClass == 4 ~ 0.75,
+      DecayClass == 5 ~ 0.50
+    ),
+    Adjusted_hundred = hundred * DecayFactor)%>%
+  group_by(PlotID)%>%
+  summarise(hundredhour=mean(Adjusted_hundred))
+
+#merge to final data frame
+Thor_data <- Thor_data %>%
+  left_join(
+    large_load %>% 
+      select(PlotID, hundredhour),
+    by = "PlotID" )
+
+## shrub, forb, grass photoload plot level estimates
+vegetation_load <- Photoloading %>%
+  select(PlotID, shrub, grass, forb,shrub_height.ref, shrub_height.obs,forb_height.ref, forb_height.obs,grass_height.ref, grass_height.obs) %>%
+  mutate(across(where(is.numeric), ~ na_if(., 0))) %>%
+  mutate(
+    shrub_height_ratio = shrub_height.obs / shrub_height.ref,
+    forb_height_ratio  = forb_height.obs  / forb_height.ref,
+    grass_height_ratio = grass_height.obs / grass_height.ref) %>%
+  mutate(across(where(is.numeric), ~ replace_na(., 0))) %>%
+  mutate(
+    shrubload = shrub * shrub_height_ratio,
+    forbload  = forb  * forb_height_ratio,
+    grassload = grass * grass_height_ratio)%>%
+  group_by(PlotID)%>%
+  summarise(
+    shrubload=mean(shrubload),
+    forbload=mean(forbload),
+    grassload=mean(grassload))
+
+#merge to final data frame
+Thor_data <- Thor_data %>%
+  left_join(
+    vegetation_load %>% 
+      select(PlotID, shrubload,grassload,forbload),
+    by = "PlotID" )
+
+
+#1000 hour browns transect logs
+##Add constants
+logs<- logs %>%
+  mutate(
+    a= 1.0,
+    Nl= 100,
+    S = case_when(
+      Decay == "rotten" ~ 0.30,
+      Decay == "sound"  ~ 0.40,))
+##Slope Correction Factor
+Slope <- PlotInformation %>%
+  select(PlotID, Slope) #create temporary new data base selecting PlotID and Slope
+logs <- logs %>%
+  left_join(Slope, by = "PlotID") #join new slope data base to Logs by matching plotID
+logs <- logs %>%
+  mutate(c = sqrt(1 + ( (Slope / 100)^2 ))) #calculate c (slope correction factor)
+#Sum diameter squared
+### calculate sound and rotten seperate. 
+logs_rotten <- logs %>%
+  filter(Decay == "rotten") %>%
+  select(PlotID, Decay, a, S, c, Nl, Diameter)%>%
+  mutate(d2 = Diameter^2)%>% # square the diameter
+  group_by(PlotID) %>%
+  mutate(rotten_sumd2 = sum(d2, na.rm = TRUE)) %>%
+  ungroup()
+
+logs_sound<-logs %>%
+  filter(Decay == "sound") %>%
+  select(PlotID, Decay, a, S, c, Nl, Diameter)%>%  
+  mutate(d2 = Diameter^2)%>% # square the diameter
+  group_by(PlotID) %>%
+  mutate(sound_sumd2 = sum(d2, na.rm = TRUE)) %>% #sum of the diameter squared for each plot
+  ungroup()
+
+#Logs calculation 
+logs_sound<- logs_sound%>%
+  mutate(sound_load = (11.64 * sound_sumd2 * S * a * c) / Nl)
+logs_rotten<- logs_rotten%>%
+  mutate(rotten_load = (11.64 * rotten_sumd2 * S * a * c) / Nl)
+### Combine sound and rotten load
+logs_load <- logs %>%
+  select(PlotID) %>%
+  left_join(
+    logs_rotten %>% 
+      select(PlotID, rotten_load),
+    by = "PlotID" )%>%
+  left_join(
+    logs_sound %>% select(PlotID, sound_load),
+    by = "PlotID" )%>% 
+  mutate(across(where(is.numeric),
+    ~ replace_na(as.numeric(.), 0))%>%
+  mutate(thousandhour=rotten_load+sound_load)) #add sound and rotten together to get total thousand
+logs_load <- as.data.frame(logs_load)
+logs_load <- logs_load %>% distinct(PlotID, .keep_all = TRUE) #remove duplicated rows
+
+#merge to final data frame
+Thor_data <- Thor_data %>%
+  left_join(
+    logs_load %>% 
+      select(PlotID, thousandhour),
+    by = "PlotID" )
+
+##logs abundance 
+logabundance <- logs %>%
+  group_by(PlotID) %>%
+  summarise(LogAbundance = n(), .groups = "drop")
+#merge to final data frame
+Thor_data <- Thor_data %>%
+  left_join(
+    logabundance %>% 
+      select(PlotID, LogAbundance),
+    by = "PlotID" )
+
+##litter and duff
+#n=97
+litterduff <- litterduff %>%
+  rowwise() %>%
+  mutate(
+    mean_litter = mean(c_across(c(2,4,6,8)), na.rm = TRUE),
+    mean_duff   = mean(c_across(c(3,5,7,9)), na.rm = TRUE)) %>%
+  ungroup()
+
+#merge to final data frame
+Thor_data <- Thor_data %>%
+  left_join(
+    litterduff %>% 
+      select(PlotID, mean_litter, mean_duff),
+    by = "PlotID" )
+
+##canopy cover
+canopy <- canopy %>%
+  group_by(PlotID, HM) %>% # group by PlotID and hit/miss
+  summarise(count = n(), .groups = "drop") %>%  # count occurrences
+  pivot_wider(  # reshape, hits and misses are columns with the count 
+    names_from = HM,
+    values_from = count,
+    values_fill = 0) %>%
+  mutate(
+    total = hit + miss,     # total number of observations per plot
+    canopycover = hit / total)%>% #proportion of hits
+  mutate(across(where(is.numeric),~ replace_na(as.numeric(.), 0)))
+#merge to final data frame
+Thor_data <- Thor_data %>%
+  left_join(
+    canopy %>% 
+      select(PlotID, hit, miss, canopycover),
+    by = "PlotID" )
+
+
+##Calculate mortality: dead BA/total proportion in each plot 
+#basal area of each tree
+#for split plots divide by half the plot area
+
+# Per-tree basal area (ft^2) from DBH; scale factor expands plot count to trees/acre
+largetrees<-largetrees %>%
+  mutate(
+    basalarea=0.005454154*(DBH^2), #in ft squared
+    scalefactor = case_when(
+          treesplit == 'Y' ~ 20, #split plot was half the plot so the scale factor is double
+          treesplit == 'N' ~ 10)) #plot is 1/10th an acre so *10=1 acre
+
+# Add plot-level covariates
+largetrees <- largetrees %>%
+  left_join(
+    Thor_data %>%
+      select(PlotID, Slope, Treatment, SiteClass),
+    by = "PlotID")
+
+# Per-species basal area by plot, scaled to trees/acre
+SpeciesBasalArea <- largetrees %>%
+  group_by(PlotID, Species) %>%
+  summarise(
+    species_ba = sum(basalarea, na.rm = TRUE),
+    species_ba_scaled = species_ba * scalefactor) %>%
+  distinct(PlotID, .keep_all = TRUE) %>%
+  as.data.frame()
+
+# Plot-level total and dead basal area, scaled, and proportion dead (mortality)
+treesbasalarea <- largetrees %>%
+  group_by(PlotID) %>%
+  summarise(
+    plot_ba = sum(basalarea, na.rm = TRUE),
+    dead_ba = sum(basalarea[Status == "Dead"], na.rm = TRUE),
+    scaled_ba = plot_ba * scalefactor,
+    scaled_dead_ba = dead_ba * scalefactor,
+    prop.density.dead = if_else(scaled_ba == 0,0, scaled_dead_ba / scaled_ba)) %>%
+  distinct(PlotID, .keep_all = TRUE) %>%
+  as.data.frame()
+##B_SC3_40 has 0 trees so the scaled_ba is 0 and mortality is 0 
+
+# Merge mortality and basal area back into main and tree-level data frames
+Thor_data <- Thor_data %>%
+  left_join(
+    treesbasalarea %>%
+      select(PlotID, prop.density.dead, scaled_ba),
+    by = "PlotID")
+largetrees <- largetrees %>%
+  left_join(
+    treesbasalarea %>%
+      select(PlotID, prop.density.dead, scaled_ba),
+    by = "PlotID")
+
+# Trees per acre
+TPA <- largetrees %>%
+  group_by(PlotID) %>%
+  summarise(
+    TPP = n(),
+    deadTPP = sum(Status == "Dead", na.rm = TRUE),
+    TPA = TPP * scalefactor, # trees per acre
+    deadTPA = deadTPP * scalefactor,
+    .groups = "drop")
+TPA <- as.data.frame(TPA)
+TPA <- TPA %>% distinct(PlotID, .keep_all = TRUE) #remove duplicated rows
+
+SPA <- largetrees %>% ##stems per acre
+  group_by(PlotID, Species) %>%
+  summarise(
+    stems = n(),
+    SPA = stems * first(scalefactor),
+    .groups = "drop")
+
+#merge to final data frame
+Thor_data <- Thor_data %>%
+  left_join(
+    TPA %>% 
+      select(PlotID,TPP, deadTPA,TPA),
+    by = "PlotID" )
+
+# Slope and Elevation need to be on the same scale, relativise 
+Thor_data <- Thor_data %>%
+  mutate(
+    SlopeZ=as.numeric(scale(Slope)),
+    scaled_baZ=as.numeric(scale(scaled_ba)),
+    ElevationZ=as.numeric(scale(Elevation)))
+
+Thor_data$Aspect<-as.factor(Thor_data$Aspect)
+#Seedling Sapling Abundance 
+#Sapling
+Sapling_total <- Sapling %>%
+  group_by(PlotID) %>%
+  summarise(SaplingAbundance = sum(Count, na.rm = TRUE)
+  )
+#merge to final data frame
+Thor_data <- Thor_data %>%
+  left_join(
+    Sapling_total %>% 
+      select(PlotID, SaplingAbundance),
+    by = "PlotID" )
+
+##re-class seedling abundance to midpoint of range
+Seedling <-Seedling%>%
+  mutate(
+    Count = case_when(
+      Abundance == "FE" ~ 5,
+      Abundance == "MO" ~ 15,
+      Abundance == "MA" ~ 25))
+Seedling_Abundance<-Seedling%>%
+  mutate(
+    Seedling_Abundance = case_when(
+      Abundance == "FE" ~ 5,
+      Abundance == "MO" ~ 15,
+      Abundance == "MA" ~ 25,))%>%
+      group_by(PlotID)%>%
+  summarise(SeedlingAbundance=sum(Seedling_Abundance, na.rm = TRUE))
+
+##add to recruitment data frame
+Recruitment <- Recruitment %>%
+  left_join(
+    Seedling_Abundance %>% 
+      select(PlotID, SeedlingAbundance),
+    by = "PlotID" )
+#merge to final data frame
+Thor_data <- Thor_data %>%
+  left_join(
+    Seedling_Abundance %>% 
+      select(PlotID, SeedlingAbundance),
+    by = "PlotID" )
+
+###Matrix of # of each species in columns and the PlotID in rows
+##B_SC3_40 has 0 trees so it will be dropped from analysis
+TreeMatrix <- largetrees %>%
+  filter(!is.na(Species), Species != "Unknown") %>% 
+  group_by(PlotID, Species) %>%
+  summarise(Abundance = n(), .groups = "drop") %>%
+  pivot_wider(
+    names_from = Species,
+    values_from = Abundance,
+    values_fill = 0)
+TreeMatrix <- data.frame(TreeMatrix)
+
+# Species-by-plot matrix (no PlotID column)
+TreeHillSD <- TreeMatrix[,-1]
+hill <- renyi(TreeHillSD, scales = 1) 
+HillShannon <- as.vector(exp(hill))
+TreeHillD <- data.frame(
+  PlotID = TreeMatrix$PlotID,
+  HillShannon = as.numeric(HillShannon))
+#merge to final data frame
+Thor_data <- Thor_data %>%
+  left_join(
+    TreeHillD %>% 
+      select(PlotID, HillShannon),
+    by = "PlotID" )
+
+###Just Live Trees Hill Number Diversity.. including seedlings and saplings
+# Live large trees (exclude dead/unknown), scaled to trees/acre
+LiveTrees <- largetrees %>%
+  filter(Status %in% c("Good", "Poor")) %>% #no dead
+  mutate(Species = if_else(is.na(Species), "Unknown", Species)) %>%  
+  filter(tolower(Species) != "unknown") %>%
+  group_by(PlotID, Species) %>%  
+  summarise(
+    Count = n(),
+    scalefactor = first(scalefactor), 
+    .groups = "drop") %>%
+  mutate(LiveTPA = Count * scalefactor)
+
+# Live seedlings, scaled to trees/acre (11.8 ft radius plot)
+SeedlingLive <- Seedling %>%
+  mutate(Species = if_else(is.na(Species), "Unknown", Species)) %>%  
+  filter(tolower(Species) != "Unknown") %>%
+  mutate(LiveTPA = Count * 100)  # scale factor for 11.8 ft radius (1/100 acre)
+
+# Live saplings, scaled to trees/acre
+SaplingLive <- Sapling %>%
+  mutate(Species = if_else(is.na(Species), "Unknown", Species)) %>%  # replace NA with "Unknown"
+  filter(tolower(Species) != "unknown") %>%
+  mutate(LiveTPA = Count * 100)
+
+# Keep only PlotID/Species/LiveTPA for combining
+LiveTrees0 <- LiveTrees %>%
+  select(PlotID, Species, LiveTPA)
+SeedlingLive0 <- SeedlingLive %>%
+  select(PlotID, Species, LiveTPA)
+SaplingLive0 <- SaplingLive %>%
+  select(PlotID, Species, LiveTPA)
+
+# Combine all live size classes into one species-by-plot table
+AllLiveTrees <- bind_rows(LiveTrees0, SeedlingLive0, SaplingLive0) %>%
+  group_by(PlotID, Species) %>%
+  summarise(LiveTPA = sum(LiveTPA, na.rm = TRUE), .groups = "drop")
+
+# Species-by-plot matrix
+AllLiveTrees <- AllLiveTrees %>%
+  select(PlotID, Species, LiveTPA) %>%
+  pivot_wider(
+    names_from  = Species,
+    values_from = LiveTPA,
+    values_fill = 0)
+
+# Convert to matrix, drop plots with no live trees
+LiveTreeHill_matrix <- AllLiveTrees %>%
+  column_to_rownames("PlotID") %>%
+  as.matrix()
+LiveTreeHill_matrix <- LiveTreeHill_matrix[rowSums(LiveTreeHill_matrix) > 0, ] #remove rows with no trees
+
+# Calculation of Hill diversity (order 1, i.e. exponential of Shannon entropy)
+hill_l <- renyi(LiveTreeHill_matrix, scales = 1) 
+HillLive <- as.vector(exp(hill_l))
+LiveTreeHill_df <- data.frame(
+  PlotID = rownames(LiveTreeHill_matrix),
+  HillLive = HillLive)
+
+#merge to final data frame
+Thor_data <- Thor_data %>%
+  left_join(
+    LiveTreeHill_df %>% 
+      select(PlotID, HillLive),
+    by = "PlotID" )
+##Species composition "community" matrix construction
+# Remove unidentified species
+largetrees<-largetrees%>%
+  filter(Species != "Unknown") %>%
+  mutate(
+    Treatment = case_when(
+      str_starts(PlotID, "B_") ~ "B",
+      str_starts(PlotID, "U_") ~ "U"))
+
+# Build a matrix of Treatment indexed by PlotID, for use in ordination/PERMANOVA
+LT_2 <- largetrees %>%
+  distinct(PlotID, Treatment) %>%
+  column_to_rownames("PlotID")
+
+
+##RE-project X Y to UTM
+Thor_sf <- st_as_sf(Thor_data, coords = c("x", "y"), crs = 4326)
+Thor_sf_utm <- st_transform(Thor_sf, crs = 32611) #UTM zone 11N
+utm_coords <- st_coordinates(Thor_sf_utm)
+Thor_data$Easting <- utm_coords[,1]
+Thor_data$Northing <- utm_coords[,2]
+
+
+#Restructure canopy data for hurdle model: binary indicators for complete survival/mortality, plus a subset of intermediate values for the continuous component
+Thor_data_canopy <- Thor_data %>%
+  filter(!is.na(canopycover)) %>%
+  mutate(
+    canopy_absence = ifelse(canopycover==0,1,0),
+    canopy_full = ifelse(canopycover==1,1,0))
+
+Thor_data_canopy_sev<-Thor_data_canopy%>%
+  filter(!is.na(Severity))%>%
+  mutate(
+    canopy_absence = ifelse(canopycover==0,1,0),
+    canopy_full = ifelse(canopycover==1,1,0))
+
+Thor_data_canopy_middle <- Thor_data_canopy %>%
+  filter(canopy_absence == 0,
+         canopy_full == 0)
+
+Thor_data_canopy_middle_sev<-Thor_data_canopy_middle%>%
+  filter(!is.na(Severity))
+
+##Restructure mortality data for hurdle model: binary indicators for complete survival/mortality, plus a subset of intermediate values for the continuous component
+Thor_data_mortality <- Thor_data %>%
+  filter(!is.na(prop.density.dead)) %>%
+  mutate(
+    AllLive = ifelse(prop.density.dead==0,1,0),
+    AllDead = ifelse(prop.density.dead==1,1,0))
+Thor_data_mortality_middle <- Thor_data_mortality %>%
+  filter(AllLive == 0,
+         AllDead == 0)
+
+#Reshaping fuels data 
+Thor_data_fuels<-Thor_data%>%
+  pivot_longer(
+    cols = c(shrubload, forbload, grassload, onehour, tenhour, hundredhour, thousandhour),
+    names_to = "FuelType",
+    values_to = "Load")
+
+Thor_data_fuels_sev<-Thor_data_fuels%>%
+  filter(!is.na(Severity))
+
+Thor_data_recruitment<-Thor_data%>%
+  pivot_longer(
+    cols = c(SeedlingAbundance, SaplingAbundance),
+    names_to = "Type",
+    values_to = "Abundance")
+Thor_data_Brecruitment<-Thor_data_recruitment%>%
+  filter(Treatment=="B")
+
+Thor_data_recruitment_sev<-Thor_data_recruitment%>%
+  filter(!is.na(Severity))
+
+Thor_data_LD<-Thor_data%>%
+  filter(!is.na(mean_litter))%>%
+  pivot_longer(
+    cols = c(mean_litter, mean_duff),
+    names_to = "Type",
+    values_to = "Depth")%>%
+  mutate(Type=as.factor(Type))
+
+
+Thor_data_LD_sev<-Thor_data_LD%>%
+  filter(!is.na(Severity))
+
+Thor_data_SH<-Thor_data%>%
+  filter(!is.na("Stand Height (ft.)"))
+
+Thor_data_UH <- Thor_data %>%
+  mutate(UH = as.numeric(`Live Fuel Height (in.)`)) %>%
+  filter(
+    !is.na(UH),
+    UH != 0)
+
+Thor_data_sev<-Thor_data%>%
+  filter(!is.na(Severity))
+
+Thor_data_BA <- Thor_data %>%
+  filter(scaled_ba != 0)%>%
+  mutate(log_sBA = log(scaled_ba))
+
+Thor_data_vegcover <- Thor_data %>%
+  filter(!is.na(Shrub))
+
+Thor_data_shannon<-Thor_data%>%
+  filter(!is.na(HillShannon))
+
+Thor_data_Live<-Thor_data%>%
+  filter(!is.na(HillLive))
+
+
+Thor_data_fuels$FuelType <- factor(
+  Thor_data_fuels$FuelType,
+  levels = c(
+    "forbload",
+    "shrubload",
+    "grassload",
+    "onehour",
+    "tenhour",
+    "hundredhour",
+    "thousandhour"))
+
+Thor_data_Burn<-Thor_data%>%
+  filter(Treatment=="B")%>%
+  mutate(
+    OD_category = cut(
+      HillShannon,
+      breaks = c(0, 1, 2.5, Inf),
+      labels = c("1", "2", "3"),
+      include.lowest = TRUE))
+
+##Forest Structure variables for ordination
+FS_vars_all <- Thor_data %>%
+  select(
+    PlotID, 
+    Treatment,
+    `Stand Height (ft.)`,
+    `Live Fuel Height (in.)`,
+    canopycover,
+    SeedlingAbundance,
+    SaplingAbundance,
+    Shrub, 
+    Forb, 
+    Grass,
+    scaled_ba,
+    'Mortality' = prop.density.dead) %>%
+  mutate(
+    across(c(`Stand Height (ft.)`,
+             `Live Fuel Height (in.)`,
+             SeedlingAbundance,
+             SaplingAbundance),
+           ~ as.numeric(as.character(.))))%>%
+    mutate(
+    Shrub = factor(Shrub, levels = c("trace","minor","common","abundant"), ordered = TRUE),
+    Forb  = factor(Forb,  levels = c("trace","minor","common","abundant"), ordered = TRUE),
+    Grass = factor(Grass, levels = c("trace","minor","common","abundant"), ordered = TRUE))%>%
+  drop_na()%>%
+  mutate(Treatment = case_when(
+      str_starts(PlotID, "B_") ~ "B",
+      str_starts(PlotID, "U_") ~ "U"))
+  
+FS_vars <- FS_vars_all %>%
+select(-PlotID, -Treatment)
+
+
+largetrees <- largetrees %>%
+  filter(Species != "Unknown") %>%
+  mutate(
+    Treatment = case_when(
+      str_starts(PlotID, "B_") ~ "B",
+      str_starts(PlotID, "U_") ~ "U"))
+
+LT_2 <- largetrees %>%
+  distinct(PlotID, Treatment) %>%
+  column_to_rownames("PlotID")
+
+comm_SC <- largetrees %>%
+  group_by(PlotID, Species) %>%
+  summarise(SPA = n() * first(scalefactor), .groups = "drop") %>%
+  pivot_wider(
+    names_from = Species,
+    values_from = SPA,
+    values_fill = 0) %>%
+  column_to_rownames("PlotID")
+
+
+
+```
+
+Data Exploration:
+I followed the data exploration protocol outlined by Zuur et al. (2009) to identify issues that could violate model assumptions or bias results. This process included examining the distributions of response variables, detecting outliers, assessing zero inflation, evaluating collinearity among predictors, and checking for relationships between variables. These exploratory analyses guided the selection of appropriate error distributions and link functions for the generalized linear models (GLMs), ensuring that each response variable was analyzed using a model suited to its underlying data structure.
+
+Step 1: Outliers
+To screen for outliers, boxplots were generated for each response variable, including the fine and coarse woody fuel load classes (1-, 10-, 100-, and 1000-hour fuels), understory vegetation loads (shrub, grass, forb), canopy cover, tree mortality (proportion of dead trees), seedling and sapling abundance, scaled basal area, and diversity of trees and just live trees including seedlings and saplings. Small fuel load classes were reshaped into long format to allow side-by-side comparison across fuel types in a single plot.
+
+Step 2: Homogeneity of Variance in Y
+Homogeneity of variance was assessed by fitting a simple linear model of each response variable against Treatment, then plotting the residuals against fitted values (and, for a subset of variables, scale-location and Q-Q plots) to check for non-constant variance or patterns indicating a poor mean-variance relationship.
+
+Step 3: Normality of Y
+The distribution of each response variable was visually assessed using histograms to evaluate normality and identify skewness that could inform the choice of error distribution for later GLMs. Tree diversity was log-transformed based on this inspection.
+
+Step 4: Zero Inflation in Y
+The frequency of zero values in each response variable was tabulated using count() to assess the degree of zero inflation, which informed whether zero-inflated or hurdle model structures would be needed for the GLMs.
+
+Step 5: Collinearity Among Predictors
+Collinearity among predictor variables (Treatment, SiteClass, Severity, Slope, and Elevation) was assessed by fitting a linear model with all predictors and calculating Variance Inflation Factors (VIF) for each. Including both Treatment and Severity in the same model produced elevated VIF values (above 3) for both predictors, so each was instead evaluated in a separate model — Treatment and Severity representing two distinct hypotheses rather than a single combined effect. With either predictor modeled on its own, all covariates had VIF values below 3. Removing canopy cover further improved VIF in the Treatment models, though not in the Severity models.
+
+Step 6: Relationships Between Y and X, and Step 7: Interactions
+Response variables were reshaped into long format and plotted against each continuous predictor (Slope, Elevation) using scatterplots with linear trend lines, and against each categorical predictor (Treatment, Severity, SiteClass) using boxplots with jittered points, faceted by response variable, to visually screen for relationships and potential interaction effects. These plots suggested possible relationships between each response variable and Slope, Elevation, Treatment, and Severity; however, Treatment and Severity remained the primary predictors of interest for hypothesis testing.
+
+To formally evaluate candidate two-way interactions identified from the hypotheses above, a linear model was fit separately for each response variable and each predictor pair and coefficient tables were compiled and displayed using flextable. Because burned plots did not occur at lower elevations, a Treatment × Elevation interaction was not included in subsequent models because the estimate would rely on extrapolation into elevation ranges outside what burned plots actually occupied and could be unreliable or fail to converge. For the same reason, Severity was not modeled as an interaction with Elevation: high and extreme severity occurred only at high elevation, and severity levels were not evenly distributed across slope either, so interactive effects involving these combinations would similarly extrapolate beyond the range of the data. Basal area, mortality, and canopy cover were also not explored as interaction terms, since these variables are themselves outcomes of the burn rather than factors that would modulate the response to it. Aspect, by contrast, was explored for potential interactive effects, given its established role in influencing post-fire vegetation growth in other studies.
+
+These exploratory plots also revealed several patterns worth carrying into model selection. Fuel loads showed differing responses to Treatment between burned and unburned sites; stand height showed a notable interaction between Aspect and Treatment, though little evidence of a Slope × Treatment interaction; live fuel height showed a possible Treatment × Aspect interaction but not a Slope interaction; canopy cover showed an interesting Slope-dependent Treatment effect; and both seedling and sapling abundance showed evidence of Treatment effects modulated by both Aspect and Slope. Mortality also showed a notable interaction between Slope and Treatment. Such interactions of interest will be included in global models and further explored in the next section. 
+
+```{r}
+## Step 1: Outliers
+# 1, 10, 100 hour fuels
+small_load_long <- Thor_data %>%
+  pivot_longer(cols = c(`onehour`, `tenhour`, `hundredhour`),
+               names_to = "FuelType",
+               values_to = "Load")
+ggplot(small_load_long, aes(x = FuelType, y = Load)) +
+  geom_boxplot() +
+  labs(title = "Small Fuel Loads",
+       x = "Fuel Type",
+       y = "Load")
+
+# 1000 fuels
+ggplot(Thor_data, aes(x = "thousandhour", y = thousandhour)) +
+  geom_boxplot() +
+  labs(title = "Thousand Hour Fuel Outlier Check",
+       x = "",
+       y = "Fuel Load")
+
+## shrub. forb, grass load
+Veg_load_long <- Thor_data %>%
+  pivot_longer(cols = c(`shrubload`, `grassload`, `forbload`),
+               names_to = "FuelType",
+               values_to = "Load")
+## Canopy
+ggplot(Thor_data, aes(x = "canopycover", y = canopycover)) +
+  geom_boxplot() +
+  labs(title = "Prop. Canopy Cover Outlier Check",
+       x = "",
+       y = "proportion")
+
+#Mortality
+ggplot(Thor_data, aes(x = "Mortality", y = prop.density.dead)) +
+  geom_boxplot() +
+  labs(title = "Mortality Outlier Check",
+       x = "",
+       y = "proportion")
+
+#Seedling Abundance
+ggplot(Thor_data, aes(x = "Seedling Abundance", y = SeedlingAbundance)) +
+  geom_boxplot() +
+  labs(title = "Seedlings Outlier Check",
+       x = "",
+       y = "seedlings")
+#Sapling Abundance
+ggplot(Thor_data, aes(x = "Sapling Abundance", y = SaplingAbundance)) +
+  geom_boxplot() +
+  labs(title = "Sapling Outlier Check",
+       x = "",
+       y = "saplings")
+
+#scaled basal area trees/acre
+ggplot(Thor_data, aes(x = "scaledba", y = scaled_ba)) +
+  geom_boxplot() +
+  labs(title = "trees/acre Outlier Check",
+       x = "",
+       y = "trees/acre")
+
+#Shannon Diversity 
+ggplot(Thor_data, aes(x = "Diversity", y = HillShannon)) +
+  geom_boxplot() +
+  labs(title = "Shannon Diversity Outlier Check",
+       x = "",
+       y = "Index")
+
+#Shannon Diversity Live 
+ggplot(Thor_data, aes(x = "Live Diversity", y = HillLive)) +
+  geom_boxplot() +
+  labs(title = "Live Diversity Outlier Check",
+       x = "",
+       y = "Index")
+
+#Slope
+ggplot(Thor_data, aes(x = "scaledba", y = scaled_ba)) +
+  geom_boxplot() +
+  labs(title = "trees/acre Outlier Check",
+       x = "",
+       y = "trees/acre")
+
+## Step 2: Homogeneity in Y
+model_onehour <- lm(onehour ~ Treatment, data = Thor_data)
+plot(model_onehour, which = 1)   # Residuals vs fitted
+
+model_tenhour <- lm(tenhour ~ Treatment, data = Thor_data)
+plot(model_tenhour, which = 1)   # Residuals vs fitted
+
+model_hundredhour <- lm(hundredhour ~ Treatment, data = Thor_data)
+plot(model_hundredhour, which = 1)   # Residuals vs fitted
+
+model_thousandhour <- lm(thousandhour ~ Treatment, data = Thor_data)
+plot(model_thousandhour, which = 1)   # Residuals vs fitted
+
+model_shrubload <- lm(shrubload ~ Treatment, data = Thor_data)
+plot(model_shrubload, which = 1)   # Residuals vs fitted
+
+model_grassload <- lm(grassload ~ Treatment, data = Thor_data)
+plot(model_grassload, which = 1)   # Residuals vs fitted
+
+model_forbload <- lm(forbload ~ Treatment, data = Thor_data)
+plot(model_forbload, which = 1)   # Residuals vs fitted
+
+model_canopy <- lm(canopycover ~ Treatment, data = Thor_data)
+plot(model_canopy, which = 1)   # Residuals vs fitted
+
+model_mortality <- lm(prop.density.dead ~ Treatment, data = Thor_data)
+plot(model_mortality, which = 1)   # Residuals vs fitted
+
+model_sap <- lm(SaplingAbundance ~ Treatment, data = Thor_data)
+plot(model_sap, which = 1)   # Residuals vs fitted
+plot(model_sap, which = 3)   # scale-location
+
+model_seed <- lm(SeedlingAbundance ~ Treatment, data = Thor_data)
+plot(model_seed, which = 1)   # Residuals vs fitted
+plot(model_seed, which = 3)   # scale-location
+plot(model_seed, which = 2)   # QQ-plot
+
+model_diversity <- lm(HillShannon ~ Treatment, data = Thor_data)
+plot(model_diversity, which = 1)   # Residuals vs fitted
+
+model_livediversity <- lm(HillLive ~ Treatment, data = Thor_data)
+plot(model_livediversity, which = 1)   # Residuals vs fitted
+
+#Step 3: Normality in Y  
+hist(Thor_data$onehour)
+hist(Thor_data$tenhour)
+hist(Thor_data$hundredhour)
+hist(Thor_data$thousandhour)
+hist(Thor_data$shrubload)
+hist(Thor_data$grassload)
+hist(Thor_data$forbload)
+hist(Thor_data$canopycover)
+hist(Thor_data$prop.density.dead)
+hist(Thor_data$SeedlingAbundance)
+hist(litterduff$mean_litter)
+hist(Thor_data$mean_duff)
+hist(Thor_data$SaplingAbundance)
+hist(Thor_data$HillShannon)
+hist(Thor_data$HillLive)
+
+#Step 4: Zeros Y
+Thor_data %>%
+  count(onehour)
+Thor_data %>%
+  count(tenhour)
+Thor_data %>%
+  count(hundredhour)
+Thor_data %>%
+  count(thousandhour)
+Thor_data %>%
+  count(shrubload)
+Thor_data %>%
+  count(grassload)
+Thor_data %>%
+  count(forbload)
+Thor_data %>%
+  count(canopycover)
+Thor_data %>%
+  count(prop.density.dead)
+Thor_data %>%
+  count(SeedlingAbundance)
+Thor_data %>%
+  count(SaplingAbundance)
+Thor_data %>%
+  count(HillShannon)
+Thor_data %>%
+  count(HillLive)
+
+#Step 5: Colinearity in X
+
+## Topographic predictors
+modelcolinearity_topo <- lm(onehour ~ Treatment + SiteClass + Slope + Elevation, data = Thor_data)
+vif(modelcolinearity_topo)
+
+## Severity in place of Treatment
+modelcolinearity_severity <- lm(onehour ~ Severity + SiteClass + Slope + Elevation, data = Thor_data_sev)
+vif(modelcolinearity_severity)
+
+## Adding scaled basal area (subset where basal area is defined/non-zero)
+modelcolinearity_ba <- lm(onehour ~ Treatment + SiteClass + Slope + Elevation + scaled_ba, data = Thor_data_BA)
+vif(modelcolinearity_ba)
+
+## Adding canopy cover (subset with non-boundary canopy values, matching your Beta-regression models)
+modelcolinearity_canopy <- lm(onehour ~ Treatment + SiteClass + Slope + Elevation + canopycover, data = Thor_data_canopy_middle)
+vif(modelcolinearity_canopy)
+
+## Adding mortality (subset with non-boundary mortality values, matching your Beta-regression models)
+modelcolinearity_mortality <- lm(onehour ~ Treatment + SiteClass + Slope + Elevation + prop.density.dead, data = Thor_data_mortality_middle)
+vif(modelcolinearity_mortality)
+
+## Checking canopy cover and mortality together (subset with both non-missing and non-boundary)
+Thor_data_canopy_mortality <- Thor_data %>%
+  filter(!is.na(canopycover), canopycover > 0, canopycover < 1,
+         !is.na(prop.density.dead), prop.density.dead > 0, prop.density.dead < 1)
+
+modelcolinearity_canopy_mortality <- lm(onehour ~ Treatment + SiteClass + Slope + Elevation + canopycover + prop.density.dead, data = Thor_data_canopy_mortality)
+vif(modelcolinearity_canopy_mortality)
+
+#Step 6: Relationships between Y and X
+response_vars <- c("onehour", "tenhour", "hundredhour", "thousandhour", "shrubload", "grassload", "forbload", "canopycover", "prop.density.dead", "SeedlingAbundance", "SaplingAbundance", "HillShannon")
+
+# Slope
+Response <- Thor_data %>%
+  pivot_longer(
+    cols = all_of(response_vars),
+    names_to = "response",
+    values_to = "response_value")
+
+ggplot(Response, aes(x = SlopeZ, y = response_value)) +
+  geom_point(alpha = 0.6) +
+  geom_smooth(method = "lm", se = FALSE) +
+  facet_wrap(~ response, scales = "free_y") +
+  theme_minimal() +
+  labs( title = "Scatterplots for Slope",
+        x = "Slope",
+        y = "Response Variable")
+
+# Elevation
+ggplot(Response, aes(x = ElevationZ, y = response_value)) +
+  geom_point(alpha = 0.6) +
+  geom_smooth(method = "lm", se = FALSE) +
+  facet_wrap(~ response, scales = "free_y") +
+  theme_minimal() +
+  labs( title = "Scatterplots for Elevation",
+        x = "Elevation",
+        y = "Response Variable")
+
+#Treatment
+ggplot(Response, aes(x = Treatment, y = response_value)) +
+  geom_boxplot(outlier.alpha = 0.2) +
+  geom_jitter(width = 0.2, alpha = 0.4) +
+  facet_wrap(~ response, scales = "free_y") +
+  theme_minimal() +
+  labs(title = "Relationships with Treatment", x = "Treatment", y = "response")
+
+#Severity
+ggplot(Response, aes(x = Severity, y = response_value)) +
+  geom_boxplot(outlier.alpha = 0.2) +
+  geom_jitter(width = 0.2, alpha = 0.4) +
+  facet_wrap(~ response, scales = "free_y") +
+  theme_minimal() +
+  labs(title = "Relationships with Severity", x = "Severity", y = "response")
+
+#Site Class
+ggplot(Response, aes(x = SiteClass, y = response_value)) +
+  geom_boxplot(outlier.alpha = 0.2) +
+  geom_jitter(width = 0.2, alpha = 0.4) +
+  facet_wrap(~ response, scales = "free_y") +
+  theme_minimal() +
+  labs(title = "Relationships with Site Class", x = "SiteClass", y = "response")
+
+#Step 7: Interactions
+#Fuels 
+#one hour
+##Treatment*Elevation
+ggplot(Thor_data, aes(x = ElevationZ, y = onehour, color = Treatment)) +
+  geom_point(alpha = 0.4) +
+  geom_smooth(method = "lm", se = TRUE) +
+  labs(
+    x = "ElevationZ",
+    y = "onehour",
+    color = "Treatment") +theme_minimal()
+##Treatment*SlopeZ
+ggplot(Thor_data, aes(x = SlopeZ, y = onehour, color = Treatment)) +
+  geom_point(alpha = 0.4) +
+  geom_smooth(method = "lm", se = TRUE) +
+  labs(
+    x = "SlopeZ",
+    y = "onehour",
+    color = "Treatment") +theme_minimal()
+
+##Severity*Elevation
+ggplot(Thor_data, aes(x = ElevationZ, y = onehour, color = Severity)) +
+  geom_point(alpha = 0.4) +
+  geom_smooth(method = "lm", se = TRUE) +
+  labs(
+    x = "ElevationZ",
+    y = "onehour",
+    color = "Severity") +theme_minimal()
+
+##Severity*SlopeZ
+ggplot(Thor_data, aes(x = SlopeZ, y = onehour, color = Treatment)) +
+  geom_point(alpha = 0.4) +
+  geom_smooth(method = "lm", se = TRUE) +
+  labs(
+    x = "SlopeZ",
+    y = "onehour",
+    color = "Treatment") +theme_minimal()
+
+#ten hour
+##Treatment*SlopeZ
+ggplot(Thor_data, aes(x = SlopeZ, y = tenhour, color = Treatment)) +
+  geom_point(alpha = 0.4) +
+  geom_smooth(method = "lm", se = TRUE) +
+  labs(
+    x = "SlopeZ",
+    y = "tenhour",
+    color = "Treatment") +theme_minimal()
+
+##Severity*SlopeZ
+ggplot(Thor_data, aes(x = SlopeZ, y = tenhour, color = Severity)) +
+  geom_point(alpha = 0.4) +
+  geom_smooth(method = "lm", se = TRUE) +
+  labs(
+    x = "SlopeZ",
+    y = "tenhour",
+    color = "Severity") +theme_minimal()
+
+#hundred hour
+##Treatment*SlopeZ
+ggplot(Thor_data, aes(x = SlopeZ, y = hundredhour, color = Treatment)) +
+  geom_point(alpha = 0.4) +
+  geom_smooth(method = "lm", se = TRUE) +
+  labs(
+    x = "SlopeZ",
+    y = "hundredhour",
+    color = "Treatment") +theme_minimal()
+
+#thousand hour 
+##Treatment*SlopeZ
+ggplot(Thor_data, aes(x = SlopeZ, y = thousandhour, color = Treatment)) +
+  geom_point(alpha = 0.4) +
+  geom_smooth(method = "lm", se = TRUE) +
+  labs(
+    x = "SlopeZ",
+    y = "thousandhour",
+    color = "Treatment") +theme_minimal()
+
+#Stand Height 
+##Treatment Aspect 
+ggplot(Thor_data, aes(x = Aspect, y = "Stand Height (ft.)", color = Treatment)) +
+  geom_boxplot(outlier.alpha = 0.2) +
+  geom_jitter(position = position_jitterdodge(jitter.width = 0.15), alpha = 0.4) +
+  theme_minimal() +
+  labs(
+    x = "Aspect",
+    y = "Stand Height (ft.)",
+    color = "Treatment")
+
+##Treatment Slope
+ggplot(Thor_data, aes(x = SlopeZ, y = "Stand Height (ft.)", color = Treatment)) +
+  geom_boxplot(outlier.alpha = 0.2) +
+  geom_jitter(position = position_jitterdodge(jitter.width = 0.15), alpha = 0.4) +
+  theme_minimal() +
+  labs(
+    x = "SlopeZ",
+    y = "Stand Height (ft.)",
+    color = "Treatment")
+
+#Understory Height 
+##Treatment Aspect 
+ggplot(Thor_data, aes(x = Aspect, y = `Live Fuel Height (in.)`, color = Treatment)) +
+  geom_boxplot(outlier.alpha = 0.2) +
+  geom_jitter(position = position_jitterdodge(jitter.width = 0.15), alpha = 0.4) +
+  theme_minimal() +
+  labs(
+    x = "Aspect",
+    y = "Live Fuel Height (in.)",
+    color = "Treatment")
+
+##Treatment Slope
+ggplot(Thor_data, aes(x = SlopeZ, y = `Live Fuel Height (in.)`, color = Treatment)) +
+  geom_boxplot(outlier.alpha = 0.2) +
+  geom_jitter(position = position_jitterdodge(jitter.width = 0.15), alpha = 0.4) +
+  theme_minimal() +
+  labs(
+    x = "SlopeZ",
+    y = "Live Fuel Height (in.)",
+    color = "Treatment")
+
+#Basal area
+##Treatment Slope
+ggplot(Thor_data, aes(x = SlopeZ, y = `scaled_baZ`, color = Treatment)) +
+  geom_boxplot(outlier.alpha = 0.2) +
+  geom_jitter(position = position_jitterdodge(jitter.width = 0.15), alpha = 0.4) +
+  theme_minimal() +
+  labs(
+    x = "Slope",
+    y = "Basal Area",
+    color = "Treatment")
+
+#Canopy Cover 
+##Treatment Slope 
+ggplot(Thor_data, aes(x = SlopeZ, y = canopycover, color = Treatment)) +
+  geom_point(alpha = 0.4) +
+  geom_smooth(method = "lm", se = TRUE) +
+  theme_minimal() +
+  labs(
+    x = "SlopeZ",
+    y = "Canopy Cover",
+    color = "Treatment")
+
+#Seedling 
+##Treatment Slope
+ggplot(Thor_data, aes(x = SlopeZ, y = SeedlingAbundance, color = Treatment)) +
+  geom_point(alpha = 0.4) +
+  geom_smooth(method = "lm", se = TRUE) +
+  theme_minimal() +
+  labs(
+    x = "SlopeZ",
+    y = "Seedling Abundance",
+    color = "Treatment")
+
+#Treatment*Aspect
+ggplot(Thor_data, aes(x = Aspect, y = SeedlingAbundance, color = Treatment)) +
+  geom_boxplot(outlier.alpha = 0.2) +
+  geom_jitter(position = position_jitterdodge(jitter.width = 0.15), alpha = 0.4) +
+  theme_minimal() +
+  labs(
+    x = "Aspect",
+    y = "Seedling Abundance",
+    color = "Treatment")
+
+#Sapling
+##Treatment Slope
+ggplot(Thor_data, aes(x = SlopeZ, y = SaplingAbundance, color = Treatment)) +
+  geom_point(alpha = 0.4) +
+  geom_smooth(method = "lm", se = TRUE) +
+  theme_minimal() +
+  labs(
+    x = "SlopeZ",
+    y = "Sapling Abundance",
+    color = "Treatment")
+
+#Treatment Aspect
+ggplot(Thor_data, aes(x = Aspect, y = SaplingAbundance, color = Treatment)) +
+  geom_boxplot(outlier.alpha = 0.2) +
+  geom_jitter(position = position_jitterdodge(jitter.width = 0.15), alpha = 0.4) +
+  theme_minimal() +
+  labs(
+    x = "Aspect",
+    y = "Sapling Abundance",
+    color = "Treatment")
+
+#mortality
+##Treatment*Slope
+ggplot(Thor_data, aes(x = SlopeZ, y = prop.density.dead, color = Treatment)) +
+  geom_point(alpha = 0.4) +
+  geom_smooth(method = "lm", se = TRUE) +
+  theme_minimal() +
+  labs(
+    x = "SlopeZ",
+    y = "Mortality Prop",
+    color = "Treatment")
+
+```
+
+Model Exploration 
+For each response variable, generalized linear models were built using a hypothesis-driven, manual model selection approach rather than automated stepwise or all-subsets procedures. For each response, an initial model was specified based on a priori ecological hypotheses, including Treatment or Severity, topographic covariates (Slope, Elevation, Aspect), site structural covariates (scaled basal area, canopy cover), Site Class, and their hypothesized interactions. Error distributions and link functions (e.g., Tweedie, negative binomial, beta, binomial, or Gaussian) were selected based on the distributional properties of each response variable identified during data exploration.
+
+Starting from this global model, non-significant interaction and main-effect terms were iteratively removed to generate a candidate set of nested, simpler models for each response variable. Candidate models within a set were compared using the second-order Akaike Information Criterion (AICc), which corrects for small sample sizes, using the AICc() function. Model adequacy was additionally assessed at each stage using simulation-based residual diagnostics from the DHARMa package: scaled residuals were tested for deviations from uniformity, overdispersion (testDispersion), excess zeros (testZeroInflation), and spatial autocorrelation using plot coordinates. The final model for each response variable was selected as the model that balanced parsimony and low AICc with acceptable residual diagnostics, rather than selecting strictly on AICc alone; in several cases, a model with a marginally higher AICc was retained over a lower-AICc alternative because it produced better-behaved residuals (e.g., no significant overdispersion or spatial autocorrelation). Treatment (burned/unburned) and Severity were modeled separately for each response variable, reflecting the fact that Severity is only defined for burned plots and serves as a finer-resolution descriptor of fire effects within the Treatment framework.
+
+```{r}
+##Distribution Selection 
+Thor_data_sc <- Thor_data %>%
+  mutate(
+    onehour_scaled = as.numeric(scale(onehour)),
+    tenhour_scaled = as.numeric(scale(tenhour)),
+    hundredhour_scaled = as.numeric(scale(hundredhour)),
+    thousandhour_scaled = as.numeric(scale(thousandhour)),
+    shrubload_scaled = as.numeric(scale(shrubload)),
+    grassload_scaled = as.numeric(scale(grassload)),
+    forbload_scaled = as.numeric(scale(forbload)),
+    canopycover_scaled = as.numeric(scale(canopycover)),
+    mortality_scaled = as.numeric(scale(prop.density.dead)),
+    seed_scaled = as.numeric(scale(SeedlingAbundance)),
+    sap_scaled = as.numeric(scale(SaplingAbundance)))
+
+hist(Thor_data_sc$onehour)
+hist(Thor_data_sc$onehour_scaled)
+hist(Thor_data_sc$tenhour)
+hist(Thor_data_sc$tenhour_scaled)
+hist(Thor_data_sc$hundredhour)
+hist(Thor_data_sc$hundredhour_scaled)
+hist(Thor_data_sc$thousandhour)
+hist(Thor_data_sc$thousandhour_scaled)
+hist(Thor_data_sc$shrubload)
+hist(Thor_data_sc$shrubload_scaled)
+hist(Thor_data_sc$grassload)
+hist(Thor_data_sc$grassload_scaled)
+hist(Thor_data_sc$forbload)
+hist(Thor_data_sc$forbload_scaled)
+hist(Thor_data_sc$canopycover)
+hist(Thor_data_sc$canopycover_scaled)
+hist(Thor_data_sc$prop.density.dead)
+hist(Thor_data_sc$mortality_scaled)
+hist(Thor_data_sc$SeedlingAbundance)
+hist(Thor_data_sc$seed_scaled)
+hist(Thor_data_sc$SaplingAbundance)
+hist(Thor_data_sc$sap_scaled)
+
+# Treatment= model 1
+#Severity= model 2
+
+#All Fuels Model
+model1_fuels<- glmmTMB(Load ~ FuelType *(Treatment * SlopeZ + ElevationZ + scaled_baZ + Aspect)+SiteClass,
+                         dispformula = ~ FuelType,
+                         family = tweedie(link= "log"),
+                         data=Thor_data_fuels)
+Anova(model1_fuels,type=3)
+res_model1_fuels<-simulateResiduals(model1_fuels)
+plot(res_model1_fuels)
+
+model1.1_fuels<- glmmTMB(Load ~ FuelType *(Treatment + SlopeZ + ElevationZ + scaled_baZ+ Aspect)+SiteClass,
+                       dispformula = ~ FuelType,
+                       family = tweedie(link= "log"),
+                       data=Thor_data_fuels)
+Anova(model1.1_fuels,type=3)
+res_model1.1_fuels<-simulateResiduals(model1.1_fuels)
+plot(res_model1.1_fuels)
+
+model1.2_fuels<- glmmTMB(Load ~ FuelType *(Treatment + ElevationZ + SlopeZ + Aspect)+SiteClass,
+                         dispformula = ~ FuelType,
+                         family = tweedie(link= "log"),
+                         data=Thor_data_fuels)
+Anova(model1.2_fuels,type=3)
+res_model1.2_fuels<-simulateResiduals(model1.2_fuels)
+plot(res_model1.2_fuels)
+
+AICc(model1_fuels,model1.1_fuels,model1.2_fuels)
+
+##severity 
+model2_fuels<- glmmTMB(Load ~ FuelType * (Severity + scaled_baZ + SlopeZ) + SiteClass,
+                       dispformula = ~ FuelType,
+                       family = tweedie(link= "log"),
+                       data=Thor_data_fuels_sev)
+Anova(model2_fuels, type=3)
+res_model2_fuels<-simulateResiduals(model2_fuels)
+plot(res_model2_fuels)
+
+
+model2.1_fuels<- glmmTMB(Load ~ FuelType * (Severity + scaled_baZ) + SiteClass,
+                         dispformula = ~ FuelType,
+                         family = tweedie(link= "log"),
+                         data=Thor_data_fuels_sev)
+Anova(model2.1_fuels, type=3)
+res_model2.1_fuels<-simulateResiduals(model2.1_fuels)
+plot(res_model2.1_fuels)
+
+model2.2_fuels<- glmmTMB(Load ~ FuelType * Severity + SiteClass,
+                         dispformula = ~ FuelType,
+                         family = tweedie(link= "log"),
+                         data=Thor_data_fuels)
+Anova(model2.2_fuels, type=3)
+res_model2.2_fuels<-simulateResiduals(model2.2_fuels)
+plot(res_model2.2_fuels)
+
+AICc(model2_fuels, model2.1_fuels, model2.2_fuels)
+
+##canopy cover n=99
+#U_SC3_1 has no canopy data
+
+model1_canopya <- glmmTMB(
+  canopy_absence ~  Treatment + ElevationZ + SlopeZ + SiteClass,
+  family = binomial(),
+  data = Thor_data_canopy)
+Anova(model1_canopya, type=2)
+res_model1_canopya<-simulateResiduals(model1_canopya)
+plot(res_model1_canopya) 
+
+model1.1_canopya <- glmmTMB(
+  canopy_absence ~  Treatment + ElevationZ + SiteClass,
+  family = binomial(),
+  data = Thor_data_canopy)
+Anova(model1.1_canopya, type=2)
+res_model1.1_canopya<-simulateResiduals(model1.1_canopya)
+plot(res_model1.1_canopya) 
+
+model1.2_canopya <- glmmTMB(
+  canopy_absence ~  Treatment + SiteClass,
+  family = binomial(),
+  data = Thor_data_canopy)
+Anova(model1.2_canopya, type=2)
+res_model1.2_canopya<-simulateResiduals(model1.2_canopya)
+plot(res_model1.2_canopya) 
+
+AICc(model1_canopya, model1.1_canopya, model1.2_canopya)
+
+
+model1_canopyp <- glmmTMB(
+  canopy_full ~ Treatment + SlopeZ + ElevationZ + scaled_baZ + SiteClass,
+  family = binomial(),
+  data = Thor_data_canopy)
+Anova(model1_canopyp, type=2)
+res_model1_canopyp<-simulateResiduals(model1_canopyp)
+plot(res_model1_canopyp) 
+
+model1.1_canopyp <- glmmTMB(
+  canopy_full ~ Treatment + scaled_baZ + ElevationZ + SiteClass,
+  family = binomial(),
+  data = Thor_data_canopy)
+Anova(model1.1_canopyp, type=2)
+res_model1.1_canopyp<-simulateResiduals(model1.1_canopyp)
+plot(res_model1.1_canopyp) 
+
+model1.2_canopyp <- glmmTMB(
+  canopy_full ~ Treatment + scaled_baZ + SiteClass,
+  family = binomial(),
+  data = Thor_data_canopy)
+Anova(model1.2_canopyp, type=2)
+res_model1.2_canopyp<-simulateResiduals(model1.2_canopyp)
+plot(res_model1.2_canopyp) 
+
+model1.3_canopyp <- glmmTMB(
+  canopy_full ~ Treatment + SiteClass,
+  family = binomial(),
+  data = Thor_data_canopy)
+Anova(model1.3_canopyp, type=2)
+res_model1.3_canopyp<-simulateResiduals(model1.3_canopyp)
+plot(res_model1.3_canopyp) 
+
+AICc(model1_canopyp,model1.1_canopyp, model1.2_canopyp, model1.3_canopyp)
+
+model1_canopym <- glmmTMB(
+  canopycover ~ Treatment * (SlopeZ + scaled_baZ) + ElevationZ + SiteClass,
+  family = beta_family(),
+  data = Thor_data_canopy_middle)
+Anova(model1_canopym, type=3)
+res_model1_canopym<-simulateResiduals(model1_canopym)
+plot(res_model1_canopym)
+
+model1.1_canopym <- glmmTMB(
+  canopycover ~ Treatment + scaled_baZ + SlopeZ + ElevationZ  + SiteClass,
+  family = beta_family(),
+  data = Thor_data_canopy_middle)
+Anova(model1.1_canopym, type=2)
+res_model1.1_canopym<-simulateResiduals(model1.1_canopym)
+plot(res_model1.1_canopym)
+
+model1.2_canopym <- glmmTMB(
+  canopycover ~ Treatment + scaled_baZ + ElevationZ + SiteClass,
+  family = beta_family(),
+  data = Thor_data_canopy_middle)
+Anova(model1.2_canopym, type=2)
+res_model1.2_canopym<-simulateResiduals(model1.2_canopym)
+plot(res_model1.2_canopym)
+
+model1.3_canopym <- glmmTMB(
+  canopycover ~ Treatment + scaled_baZ + SiteClass,
+  family = beta_family(),
+  data = Thor_data_canopy_middle)
+Anova(model1.3_canopym, type=2)
+res_model1.3_canopym<-simulateResiduals(model1.3_canopym)
+plot(res_model1.3_canopym)
+
+model1.4_canopym <- glmmTMB(
+  canopycover ~ Treatment + SiteClass,
+  family = beta_family(),
+  data = Thor_data_canopy_middle)
+Anova(model1.4_canopym, type=2)
+res_model1.4_canopym<-simulateResiduals(model1.4_canopym)
+plot(res_model1.4_canopym)
+
+AICc(model1_canopym,model1.1_canopym, model1.2_canopym, model1.3_canopym, model1.4_canopym)
+
+####SEVERITY
+#logistic regression for canopy absence
+model2.1_canopy <- glmmTMB(
+  canopy_absence ~ Severity + scaled_baZ + SiteClass,
+  family = binomial(),
+  data = Thor_data_canopy_sev)
+Anova(model2.1_canopy, type=2)
+res_model2.1_canopy<-simulateResiduals(model2.1_canopy)
+plot(res_model2.1_canopy)
+
+AICc(model2.1_canopy)
+
+#logistic regression for full canopy
+model2.2_canopy <- glmmTMB(
+  canopy_full ~ Severity + scaled_baZ + SiteClass,
+  family = binomial(),
+  data = Thor_data_canopy_sev)
+Anova(model2.2_canopy, type=2)
+res_model2.2_canopy<-simulateResiduals(model2.2_canopy)
+plot(res_model2.2_canopy)
+
+model2.2.1_canopy <- glmmTMB(
+  canopy_full ~ Severity + SiteClass,
+  family = binomial(),
+  data = Thor_data_canopy_sev)
+Anova(model2.2.1_canopy, type=2)
+res_model2.2.1_canopy<-simulateResiduals(model2.2.1_canopy)
+plot(res_model2.2.1_canopy)
+
+AICc(model2.2_canopy, model2.2.1_canopy)
+
+#Between 0 and 1
+model2.3_canopy <- glmmTMB(
+  canopycover ~ Severity + scaled_baZ + SlopeZ + SiteClass,
+  family = beta_family(),
+  data = Thor_data_canopy_middle_sev)
+Anova(model2.3_canopy, type=2)
+res_model2.3_canopy<-simulateResiduals(model2.3_canopy)
+plot(res_model2.3_canopy)
+
+model2.3.1_canopy <- glmmTMB(
+  canopycover ~ Severity + scaled_baZ + SiteClass,
+  family = beta_family(),
+  data = Thor_data_canopy_middle_sev)
+Anova(model2.3.1_canopy, type=2)
+res_model2.3.1_canopy<-simulateResiduals(model2.3.1_canopy)
+plot(res_model2.3.1_canopy)
+
+AICc(model2.3_canopy, model2.3.1_canopy)
+
+##treediversity
+## Diversity of all large tree (overstory)
+model1_TD <- glmmTMB(
+  HillShannon ~ Treatment * SlopeZ + prop.density.dead + SiteClass,
+  family = gaussian(),
+  data = Thor_data)
+Anova(model1_TD, type=3)
+res_model1_TD<-simulateResiduals(model1_TD)
+plot(res_model1_TD) 
+
+model2_TD <- glmmTMB(
+  HillShannon ~ Treatment + prop.density.dead + SiteClass,
+  family = gaussian(),
+  data = Thor_data)
+Anova(model2_TD, type=3)
+res_model2_TD<-simulateResiduals(model2_TD)
+plot(res_model2_TD) 
+
+model3_TD <- glmmTMB(
+  HillShannon ~ Treatment + SiteClass,
+  family = gaussian(),
+  data = Thor_data)
+Anova(model3_TD, type=3)
+res_model3_TD<-simulateResiduals(model3_TD)
+plot(res_model3_TD) 
+
+AICc(model1_TD,model2_TD, model3_TD)
+
+#Severity
+model2_OD <- glmmTMB(
+  HillShannon ~ Severity + prop.density.dead + SiteClass,
+  family = gaussian(),
+  data = Thor_data)
+summary(model2_OD)
+Anova(model2_OD, type=3)
+res_model2_OD<-simulateResiduals(model2_OD)
+plot(res_model2_OD) 
+testUniformity(res_model2_OD)
+testDispersion(res_model2_OD)
+testZeroInflation(res_model2_OD)
+
+###Just diversity of live trees (trees that will persist on the landscape) n=97. 3 plots contained all dead and no recruitment
+model1_LTD <- glmmTMB(
+  HillLive ~ Treatment * SlopeZ + SiteClass,
+  family = gaussian(),
+  data = Thor_data)
+Anova(model1_LTD,type=3)
+res_model1_LTD<-simulateResiduals(model1_LTD)
+plot(res_model1_LTD)
+
+model2_LTD <- glmmTMB(
+  HillLive ~ Treatment + SlopeZ + SiteClass,
+  family = gaussian(),
+  data = Thor_data)
+Anova(model2_LTD, type=3)
+res_model2_LTD<-simulateResiduals(model2_LTD)
+plot(res_model2_LTD) 
+
+model3_LTD <- glmmTMB(
+  HillLive ~ Treatment + SiteClass,
+  family = gaussian(),
+  data = Thor_data)
+Anova(model3_LTD, type=3)
+res_model3_LTD<-simulateResiduals(model3_LTD)
+plot(res_model3_LTD) 
+
+AICc(model1_LTD, model2_LTD, model3_LTD)
+
+#Severity
+model2_SD <- glmmTMB(
+  HillLive ~ Severity + prop.density.dead + SiteClass,
+  family = gaussian(),
+  data = Thor_data)
+summary(model2_SD)
+Anova(model2_SD, type=3)
+res_model2_SD<-simulateResiduals(model2_SD)
+plot(res_model2_SD) 
+testUniformity(res_model2_SD)
+testDispersion(res_model2_SD)
+testZeroInflation(res_model2_SD)
+
+
+##recruitment severity 
+model1_recruitment<-glmmTMB(Abundance ~ Type * (Severity + scaled_ba + SlopeZ) + SiteClass,
+                            family=nbinom2(), 
+                            data=Thor_data_recruitment)
+Anova(model1_recruitment,type=3)
+
+res_model1_recruitment<-simulateResiduals(model1_recruitment)
+plot(res_model1_recruitment)
+
+model1.2_recruitment<-glmmTMB(Abundance ~ Type * (Severity + scaled_ba) + SiteClass,
+                            family=nbinom2(), 
+                            data=Thor_data_recruitment_sev)
+Anova(model1.2_recruitment,type=3)
+res_model1.2_recruitment<-simulateResiduals(model1.2_recruitment)
+plot(res_model1.2_recruitment)
+
+model1.3_recruitment<-glmmTMB(Abundance ~ Type * Severity + SiteClass,
+                            family=nbinom2(), 
+                            ziformula = ~ Severity,
+                            data=Thor_data_recruitment_sev)
+Anova(model1.3_recruitment,type=3)
+res_model1.3_recruitment<-simulateResiduals(model1.3_recruitment)
+plot(res_model1.3_recruitment)
+AICc(model1_recruitment, model1.2_recruitment, model1.3_recruitment)
+
+##seedling abundance 
+mean_count <- mean(Thor_data$SeedlingAbundance)
+var_count  <- var(Thor_data$SeedlingAbundance)
+overdispersion_ratio <- var_count / mean_count
+
+hist(Thor_data$SeedlingAbundance)
+
+model1.0_seedling <- glmmTMB(
+  SeedlingAbundance ~ Treatment * (Aspect + SlopeZ) + ElevationZ + SiteClass,
+  family = nbinom2,
+  ziformula = ~Treatment,
+  data = Thor_data)
+Anova(model1.0_seedling, type=3)
+res_model1.0_seedling<-simulateResiduals(model1.0_seedling)
+plot(res_model1.0_seedling)
+
+model1.1_seedling <- glmmTMB(
+  SeedlingAbundance ~ Treatment * Aspect + ElevationZ + SlopeZ + SiteClass,
+  family = nbinom2,
+  ziformula = ~Treatment,
+  data = Thor_data)
+Anova(model1.1_seedling, type=3)
+res_model1.1_seedling<-simulateResiduals(model1.1_seedling)
+plot(res_model1.1_seedling)
+
+AICc(model1.0_seedling, model1.1_seedling)
+
+#Severity
+model2_seedling <- glmmTMB(
+  SeedlingAbundance ~ Severity * scaled_ba + SiteClass,
+  family = nbinom2,
+  ziformula = ~Treatment,
+  data = Thor_data)
+summary(model2_seedling)
+Anova(model2_seedling, type=3)
+res_model2_seedling<-simulateResiduals(model2_seedling)
+plot(res_model2_seedling)
+ 
+model2.1_seedling <- glmmTMB(
+  SeedlingAbundance ~ Severity + scaled_ba * SiteClass,
+  family = nbinom2,
+  ziformula = ~Treatment,
+  data = Thor_data)
+summary(model2.1_seedling)
+Anova(model2.1_seedling, type=3)
+res_model2.1_seedling<-simulateResiduals(model2.1_seedling)
+plot(res_model2.1_seedling)
+
+#Best residual plots and best AICc sig dif. 
+model2.2_seedling <- glmmTMB(
+  SeedlingAbundance ~ Severity + scaled_ba + SiteClass,
+  family = nbinom2,
+  ziformula = ~Treatment,
+  data = Thor_data)
+summary(model2.2_seedling)
+Anova(model2.2_seedling, type=3)
+res_model2.2_seedling<-simulateResiduals(model2.2_seedling)
+plot(res_model2.2_seedling)
+testUniformity(res_model2.2_seedling)
+testDispersion(res_model2.2_seedling)
+testZeroInflation(res_model2.2_seedling) 
+
+AICc(model2_seedling, model2.1_seedling, model2.2_seedling)
+
+##Sapling Abundance 
+hist(Thor_data$SaplingAbundance)
+                          
+##over dispersed
+mean_count <- mean(Thor_data$SaplingAbundance)
+var_count  <- var(Thor_data$SaplingAbundance)
+overdispersion_ratio <- var_count / mean_count
+
+model1.0_sapling <- glmmTMB(
+  SaplingAbundance ~ Treatment * (Aspect + SlopeZ + scaled_baZ) + ElevationZ + SiteClass,
+  family = nbinom2(),
+  ziformula = ~Treatment,
+  data = Thor_data)
+Anova(model1.0_sapling, type=3)
+res_model1.0_sapling<-simulateResiduals(model1.0_sapling)
+plot(res_model1.0_sapling)
+
+model1.1_sapling <- glmmTMB(
+  SaplingAbundance ~ Treatment * Aspect + ElevationZ + scaled_baZ + SiteClass,
+  family = nbinom2(),
+  ziformula = ~Treatment,
+  data = Thor_data)
+Anova(model1.1_sapling, type=3)
+res_model1.1_sapling<-simulateResiduals(model1.1_sapling)
+plot(res_model1.1_sapling)
+
+model1.2_sapling <- glmmTMB(
+  SaplingAbundance ~ Treatment * Aspect + ElevationZ + SiteClass,
+  family = nbinom2(),
+  ziformula = ~Treatment,
+  data = Thor_data)
+Anova(model1.2_sapling, type=3)
+res_model1.2_sapling<-simulateResiduals(model1.2_sapling)
+plot(res_model1.2_sapling)
+
+model1.3_sapling <- glmmTMB(
+  SaplingAbundance ~ Treatment * Aspect + SiteClass,
+  family = nbinom2(),
+  ziformula = ~Treatment,
+  data = Thor_data)
+Anova(model1.3_sapling, type=3)
+res_model1.3_sapling<-simulateResiduals(model1.3_sapling)
+plot(res_model1.3_sapling)
+
+AICc(model1.0_sapling, model1.1_sapling,model1.2_sapling, model1.3_sapling)
+
+##severity
+model2_sapling <- glmmTMB(
+  SaplingAbundance ~ Severity + scaled_ba + SiteClass,
+  family = nbinom2,
+  data = Thor_data)
+summary(model2_sapling)
+Anova(model2_sapling, type=3)
+res_model2_sapling<-simulateResiduals(model2_sapling)
+plot(res_model2_sapling)
+testUniformity(res_model2_sapling)
+testDispersion(res_model2_sapling)
+testZeroInflation(res_model2_sapling) 
+
+
+##Detritus (Litter and duff)
+model1_LD<-glmmTMB(Depth~ Type*(Treatment * SlopeZ+ scaled_baZ)+ SiteClass,
+                   family=tweedie(link = "log"),
+                   data=Thor_data_LD)
+res_model1_LD<-simulateResiduals(model1_LD)
+plot(res_model1_LD)
+Anova(model1_LD,type=3)
+
+model1.1_LD<-glmmTMB(Depth~ Type*(Treatment * scaled_baZ)+ SiteClass,
+                   family=tweedie(link = "log"),
+                   data=Thor_data_LD)
+res_model1.1_LD<-simulateResiduals(model1.1_LD)
+plot(res_model1.1_LD)
+Anova(model1.1_LD,type=3)
+
+model1.2_LD<-glmmTMB(Depth~ Type * Treatment + SiteClass,
+                     family=tweedie(link = "log"),
+                     data=Thor_data_LD)
+res_model1.2_LD<-simulateResiduals(model1.1_LD)
+plot(res_model1.2_LD)
+Anova(model1.2_LD,type=3)
+
+AICc(model1_LD, model1.1_LD,model1.2_LD)
+
+##Detritus (Litter and duff)
+model2_LD<-glmmTMB(Depth~ Type*(Severity + SlopeZ+ scaled_baZ) + SiteClass,
+                   family=tweedie(link = "log"),
+                   data=Thor_data_LD_sev)
+Anova(model2_LD,type=3)
+res_model2_LD<-simulateResiduals(model2_LD)
+plot(res_model2_LD)
+
+model2.1_LD<-glmmTMB(Depth~ Type*(Severity + scaled_baZ) + SiteClass,
+                   family=tweedie(link = "log"),
+                   data=Thor_data_LD_sev)
+Anova(model2.1_LD,type=3)
+res_model2.1_LD<-simulateResiduals(model2.1_LD)
+plot(res_model2.1_LD)
+
+model2.2_LD<-glmmTMB(Depth~ Type*Severity + SiteClass,
+                     family=tweedie(link = "log"),
+                     data=Thor_data_LD_sev)
+Anova(model2.2_LD,type=3)
+res_model2.2_LD<-simulateResiduals(model2.2_LD)
+plot(res_model2.2_LD)
+
+AICc(model2_LD, model2.1_LD, model2.2_LD)
+
+
+##mortality 
+#logistic regression for 0% mortality
+model1_mortalitya <- glmmTMB(
+  AllLive ~ Treatment * (SlopeZ + scaled_ba) + SiteClass,
+  family = binomial(),
+  data = Thor_data_mortality)
+Anova(model1_mortalitya, type=2)
+res_model1_mortalitya<-simulateResiduals(model1_mortalitya)
+plot(res_model1_mortalitya)
+testUniformity(res_model1_mortalitya)
+testDispersion(res_model1_mortalitya)
+
+model1.1_mortalitya <- glmmTMB(
+  AllLive ~ Treatment + SlopeZ + scaled_ba + SiteClass,
+  family = binomial(),
+  data = Thor_data_mortality)
+Anova(model1.1_mortalitya, type=2)
+res_model1.1_mortalitya<-simulateResiduals(model1.1_mortalitya)
+plot(res_model1.1_mortalitya)
+
+model1.2_mortalitya <- glmmTMB(
+  AllLive ~ Treatment + scaled_ba + SiteClass,
+  family = binomial(),
+  data = Thor_data_mortality)
+Anova(model1.2_mortalitya, type=2)
+res_model1.2_mortalitya<-simulateResiduals(model1.2_mortalitya)
+plot(res_model1.2_mortalitya)
+
+model1.3_mortalitya <- glmmTMB(
+  AllLive ~ Treatment + SiteClass,
+  family = binomial(),
+  data = Thor_data_mortality)
+Anova(model1.3_mortalitya, type=2)
+res_model1.3_mortalitya<-simulateResiduals(model1.3_mortalitya)
+plot(res_model1.3_mortalitya)
+
+AICc(model1_mortalitya,model1.1_mortalitya, model1.2_mortalitya, model1.3_mortalitya)
+
+#logistic regression for 100% mortality
+
+model1_mortalityp <- glmmTMB(
+  AllDead ~ Treatment + SlopeZ + scaled_ba + SiteClass,
+  family = binomial(),
+  data = Thor_data_mortality)
+Anova(model1_mortalityp, type=2)
+res_model1_mortalityp<-simulateResiduals(model1_mortalityp)
+plot(res_model1_mortalityp)
+
+
+model1.1_mortalityp <- glmmTMB(
+  AllDead ~ Treatment + SlopeZ + SiteClass,
+  family = binomial(),
+  data = Thor_data_mortality)
+Anova(model1.1_mortalityp, type=2)
+res_model1.1_mortalityp<-simulateResiduals(model1.1_mortalityp)
+plot(res_model1.1_mortalityp)
+
+AICc(model1_mortalityp,model1.1_mortalityp)
+
+#Between 0 and 1
+model1_mortalitym <- glmmTMB(
+  prop.density.dead ~ Treatment * (SlopeZ + scaled_ba) + SiteClass,
+  family = beta_family(),
+  data = Thor_data_mortality_middle)
+Anova(model1_mortalitym, type=3)
+res_model1_mortalitym<-simulateResiduals(model1_mortalitym)
+plot(res_model1_mortalitym)
+
+model1.1_mortalitym <- glmmTMB(
+  prop.density.dead ~ Treatment * SlopeZ + SiteClass,
+  family = beta_family(),
+  data = Thor_data_mortality_middle)
+Anova(model1.1_mortalitym, type=3)
+res_model1.1_mortalitym<-simulateResiduals(model1.1_mortalitym)
+plot(res_model1.1_mortalitym)
+
+AICc(model1_mortalitym,model1.1_mortalitym)
+
+
+#Severity
+model2_mortality<-glmmTMB(
+  prop.density.dead ~ Treatment + SlopeZ + SiteClass,
+  family = binomial,
+  data = Thor_data)
+Anova(model2_mortality, type=3)
+summary(model2_mortality)
+res_model2_mortality<-simulateResiduals(model2_mortality)
+plot(res_model2_mortality)
+
+
+##Stand Height 
+model1.0_standheight<-glmmTMB(
+  `Stand Height (ft.)` ~ Treatment * (Aspect + scaled_baZ) + ElevationZ + SiteClass,
+  family = gaussian,
+  data = Thor_data_SH)
+Anova(model1.0_standheight, type=3)
+res_model1.0_standheight<-simulateResiduals(model1.0_standheight)
+plot(res_model1.0_standheight)
+
+model1.1_standheight<-glmmTMB(
+  `Stand Height (ft.)` ~ Treatment * (Aspect + scaled_baZ) +SiteClass,
+  family = gaussian,
+  data = Thor_data_SH)
+Anova(model1.1_standheight, type=3)
+res_model1.1_standheight<-simulateResiduals(model1.1_standheight)
+plot(res_model1.1_standheight)
+
+AICc(model1.0_standheight, model1.1_standheight)
+
+model2_standheight<-glmmTMB(
+  `Stand Height (ft.)` ~ Severity + scaled_baZ + SlopeZ + SiteClass,
+  family = gaussian,
+  data = Thor_data_sev)
+Anova(model2_standheight, type=2)
+res_model2_standheight<-simulateResiduals(model2_standheight)
+plot(res_model2_standheight)
+
+model2.1_standheight<-glmmTMB(
+  `Stand Height (ft.)` ~ Severity + scaled_baZ + SiteClass,
+  family = gaussian,
+  data = Thor_data)
+Anova(model2.1_standheight, type=2)
+res_model2.1_standheight<-simulateResiduals(model2.1_standheight)
+plot(res_model2.1_standheight)
+
+AICc(model2_standheight, model2.1_standheight)
+
+
+##Understory Height 
+model1.0_underheight<-glmmTMB(
+  UH ~ Treatment * (Aspect + scaled_baZ + SlopeZ) + ElevationZ + SiteClass,
+  family = Gamma(link="log"),
+  data = Thor_data_UH)
+Anova(model1.0_underheight, type=3)
+res_model1.0_underheight<-simulateResiduals(model1.0_underheight)
+plot(res_model1.0_underheight)
+
+model1.1_underheight<-glmmTMB(
+  UH ~ Treatment + Aspect + scaled_baZ + SlopeZ + ElevationZ + SiteClass,
+  family = Gamma(link="log"),
+  data = Thor_data_UH)
+Anova(model1.1_underheight, type=3)
+res_model1.1_underheight<-simulateResiduals(model1.1_underheight)
+plot(res_model1.1_underheight)
+
+model1.2_underheight<-glmmTMB(
+  UH ~ Treatment + Aspect + scaled_baZ + ElevationZ + SiteClass,
+  family = Gamma(link="log"),
+  data = Thor_data_UH)
+Anova(model1.2_underheight, type=3)
+res_model1.2_underheight<-simulateResiduals(model1.2_underheight)
+plot(res_model1.2_underheight)
+
+model1.3_underheight<-glmmTMB(
+  UH ~ Treatment + Aspect + ElevationZ + SiteClass,
+  family = Gamma(link="log"),
+  data = Thor_data_UH)
+Anova(model1.3_underheight, type=3)
+res_model1.3_underheight<-simulateResiduals(model1.3_underheight)
+plot(res_model1.3_underheight)
+
+model1.4_underheight<-glmmTMB(
+  UH ~ Treatment + Aspect + SiteClass,
+  family = Gamma(link="log"),
+  data = Thor_data_UH)
+Anova(model1.4_underheight, type=3)
+res_model1.4_underheight<-simulateResiduals(model1.4_underheight)
+plot(res_model1.4_underheight)
+
+model1.5_underheight<-glmmTMB(
+  UH ~ Treatment + SiteClass,
+  family = Gamma(link="log"),
+  data = Thor_data_UH)
+Anova(model1.5_underheight, type=3)
+res_model1.5_underheight<-simulateResiduals(model1.5_underheight)
+plot(res_model1.5_underheight)
+
+AICc(model1.0_underheight,model1.1_underheight,model1.2_underheight, model1.3_underheight, model1.4_underheight, model1.5_underheight)
+
+##basal area
+model1_BA<-glmmTMB(
+  log_sBA ~ Treatment * (Aspect + SlopeZ) + ElevationZ+ SiteClass,
+  family = gaussian,
+  data = Thor_data_BA)
+Anova(model1_BA, type=3)
+res_model1_BA<-simulateResiduals(model1_BA)
+plot(res_model1_BA)
+
+model1.1_BA<-glmmTMB(
+  log_sBA ~ Treatment + Aspect + SlopeZ + SiteClass,
+  family = gaussian,
+  data = Thor_data_BA)
+Anova(model1.1_BA, type=3)
+res_model1.1_BA<-simulateResiduals(model1.1_BA)
+plot(res_model1.1_BA)
+
+model1.2_BA<-glmmTMB(
+  log_sBA ~ Treatment + SlopeZ + SiteClass,
+  family = gaussian,
+  data = Thor_data_BA)
+Anova(model1.2_BA, type=3)
+res_model1.2_BA<-simulateResiduals(model1.2_BA)
+plot(res_model1.2_BA)
+
+model1.3_BA<-glmmTMB(
+  log_sBA ~ Treatment + SiteClass,
+  family = gaussian,
+  data = Thor_data_BA)
+Anova(model1.3_BA, type=3)
+res_model1.3_BA<-simulateResiduals(model1.3_BA)
+plot(res_model1.3_BA)
+
+AICc(model1_BA, model1.1_BA,model1.2_BA, model1.3_BA)
+```
+
+Final Models: 
+Best-fit models identified through the model selection process above were used to address each study objective and generate corresponding visualizations. For each response variable, the selected model was used to calculate estimated marginal means (via emmeans) and/or predicted values (via ggpredict) for Treatment (Objectives 1–3) or Severity (Objective 4), along with pairwise contrasts and percent effect sizes calculated from back-transformed model estimates. Individual response-variable plots were standardized in appearance and later combined into multi-panel summary figures using the patchwork package.
+
+Objective 1: Assess baseline differences in forest structure between control and impact sites
+
+Multivariate forest structure differences between burned and unburned sites were tested with PERMANOVA (adonis2) on Gower dissimilarities, with the homogeneity-of-dispersion assumption checked via betadisper, and visualized with NMDS ordinations (95% confidence ellipses by Treatment).Associations between Treatment and categorical shrub, forb, and grass cover classes were tested with chi-square and Fisher's exact tests on contingency tables, and visualized as grouped bar charts combined into a three-panel figure. For each remaining response variable, the selected model (see Model Selection) was used to calculate estimated marginal means for Treatment, pairwise contrasts, and percent effect size from back-transformed estimates, plotted with 95% confidence intervals.
+
+
+Color Pallete
+```{r}
+##Color Palletes 
+Treatmentcol<-c("B" = "#E09F3E", "U" = "#74586E")
+Slope_cols<-c("-1"= "#F4A4AC", "0"= "#7F8023", "1"="#3B7D91")
+cols_sev <- c("No" = "#585123", "Low" = "#EEC170", "Medium"="#F2A65A", "High"="#F58549", "Extreme"= "#8B0000")
+```
+
+Forest Structure Differences
+```{r}
+##habitat Structure
+##PERMAONVA GOWER
+gower_dist <- daisy(FS_vars, metric = "gower") ##calculate gower distances
+set.seed(123)
+adonis2(gower_dist ~ Treatment, data = FS_vars_all, permutations = 999) #PERMANOVA
+
+#assumption check for PERMANOVA
+set.seed(123)
+disp_FS <- betadisper(gower_dist, FS_vars_all$Treatment)
+anova(disp_FS)
+
+#NMDS
+FS_nmds_structure <- metaMDS(gower_dist,k = 2,trymax = 100)
+FS_nmds_structure$stress
+
+FS_nmds_scores <- as.data.frame(FS_nmds_structure$points)
+FS_nmds_scores <- cbind(FS_nmds_scores,FS_vars_all[, c("Treatment", "PlotID")])
+
+
+
+ggplot(FS_nmds_scores, aes(MDS1, MDS2, color = Treatment, fill = Treatment)) +
+  stat_ellipse(geom = "polygon",
+               level = 0.95,
+               alpha = 0.15) +
+  geom_point(size = 3) +
+  theme_minimal() +
+  scale_color_manual(values = Treatmentcol) +
+  scale_fill_manual(values = Treatmentcol) +
+  labs(
+    x = "NMDS1",
+    y = "NMDS2",
+    color = "Burn Status",
+    fill = "Burn Status")
+```
+
+Vegetation Cover
+```{r}
+## contingency table shrub, forb, grass
+
+Shrubtable<-table(Thor_data_vegcover$Shrub, Thor_data_vegcover$Treatment)
+chisq.test(Shrubtable)
+fisher.test(Shrubtable)
+
+Thor_data_vegcover$Shrub<-factor(Thor_data_vegcover$Shrub,levels=c("absent","trace","minor","common","abundant"))
+
+vegcols=c("absent"=	"#ec6d18", "trace" = "#ffe9a3", "minor" = "#ffb933", "common"= "#f6de4b", "abundant"= "#ffa213")
+
+shrubc<-ggplot(Thor_data_vegcover, aes(x=Treatment, fill=Shrub))+ 
+  geom_bar(position="dodge")+
+    scale_fill_manual(values = vegcols)+
+  theme_minimal()
+
+Forbtable<-table(Thor_data_vegcover$Forb, Thor_data_vegcover$Treatment)
+chisq.test(Forbtable)
+fisher.test(Forbtable)
+
+Thor_data_vegcover$Forb<-factor(Thor_data_vegcover$Forb,levels=c("absent","trace","minor","common","abundant"))
+forbc<-ggplot(Thor_data_vegcover, aes(x=Treatment, fill=Forb))+ geom_bar(position="dodge")+
+   scale_fill_manual(values = vegcols)+
+  theme_minimal()
+
+Grasstable<-table(Thor_data_vegcover$Grass, Thor_data_vegcover$Treatment)
+chisq.test(Grasstable)
+fisher.test(Grasstable)
+
+Thor_data_vegcover$Grass<-factor(Thor_data_vegcover$Grass,levels=c("absent","trace","minor","common","abundant"))
+grassc<-ggplot(Thor_data_vegcover, aes(x=Treatment, fill=Grass))+ geom_bar(position="dodge")+
+  scale_fill_manual(values = vegcols)+
+  theme_minimal()
+
+shrubc<-shrubc + ggtitle("A. Shrub Cover")+theme(legend.title = element_blank())
+forbc<-forbc + ggtitle("B. Forb Cover")+theme(legend.title = element_blank())
+grassc<-grassc + ggtitle("C. Grass Cover")+theme(legend.title = element_blank())
+
+vegcover <- (shrubc | forbc | grassc) +
+  plot_layout(guides = "collect") +
+  theme(plot.margin = margin(0, 0, 0, 0))
+vegcover
+
+
+```
+
+Stand Height 
+modeled with a Treatment × Aspect and basal area × Aspect interaction, plus Elevation and Site Class; additional contrasts examined how the Treatment effect varied by Aspect and how the basal area relationship varied by Aspect.
+```{r}
+model1_standheight<-glmmTMB(
+  `Stand Height (ft.)` ~ Treatment * Aspect + scaled_baZ:Aspect + scaled_baZ + ElevationZ + SiteClass,
+  family = gaussian,
+  data = Thor_data_SH)
+Anova(model1_standheight, type=3)
+res_model1_standheight<-simulateResiduals(model1_standheight)
+plot(res_model1_standheight)
+
+SHemmeans=emmeans(model1_standheight, ~ Treatment)
+summary(SHemmeans, type = "response")
+emmeans(model1_standheight, ~ Treatment) %>%
+  contrast("revpairwise")# no need to transform because it is Gaussian
+((65.9-65.1)/65.1)*100 #percent effect size
+
+
+standheight <- ggpredict(model1_standheight, terms = "Treatment")
+
+Pstandheight <- ggplot(standheight, aes(x = x, y = predicted)) + 
+  geom_point(size = 3, color = "#87251D") +
+  geom_errorbar(
+    aes(ymin = conf.low, ymax = conf.high),
+    width = 0.15,
+    color = "#87251D") +
+  geom_text(
+    aes(label = round(predicted, 1)),
+    vjust = -0.01,
+    hjust = 1.3,
+    size = 4) +
+  annotate(
+    "text",
+    x = Inf,
+    y = Inf,
+    label = "A",
+    hjust = 1.5,
+    vjust = 1.5,
+    size = 6,
+    fontface = "bold") +
+  
+  labs(
+    x = "Treatment",
+    y = "Predicted Stand Height (ft.)") +
+  theme(
+    aspect.ratio = 1)+
+  theme_minimal()
+
+Pstandheight
+
+
+SHA <- emmeans(model1_standheight, ~ Treatment | Aspect)
+pairs(SHA)
+
+SHA <- ggpredict(model1_standheight,
+                  terms = c("Aspect","Treatment"))
+ggplot(SHA, aes(x = x, y = predicted, color = group)) +
+  geom_point(size = 3, position = position_dodge(width = 0.3)) +
+  geom_errorbar(aes(ymin = conf.low, ymax = conf.high),
+                width = 0.2,
+                position = position_dodge(width = 0.3)) +
+  scale_color_manual(values = Treatmentcol,labels = c("Unburned", "Burned")) +
+  scale_fill_manual(values = Treatmentcol) +
+  labs(
+    x = "Aspect",
+    y = "Predicted Stand Height",
+    color = "Burn Status") +
+  theme_classic()
+
+SHBAA <- emtrends(model1_standheight, ~ Aspect, var = "scaled_baZ", infer = c(TRUE, TRUE))
+SHBAA
+SHBA<- ggpredict(model1_standheight,
+                  terms = c("scaled_baZ", "Aspect"))
+ggplot(SHBA, aes(x = x, y = predicted, color = group)) +
+  geom_line(linewidth = 1.2) +
+  geom_ribbon(aes(ymin = conf.low, ymax = conf.high, fill = group),
+              alpha = 0.15, color = NA) +
+  labs(
+    x = "Basal Area (standardized)",
+    y = "Predicted Stand Height",
+    color = "Aspect",
+    fill = "Aspect"
+  ) +
+  theme_classic()
+
+```
+
+Understory Height 
+Gamma model (log link) on Treatment and Site Class
+Basal area (log-transformed): modeled with a Treatment × Slope interaction and Site Class; the interaction was visualized against observed data, and slope effects within each Treatment level estimated with emtrends
+```{r}
+model1_underheight<-glmmTMB(
+  UH ~ Treatment + SiteClass,
+  family = Gamma(link="log"),
+  data = Thor_data_UH)
+Anova(model1_underheight, type=2)
+summary(model1_underheight)
+res_model1_underheight<-simulateResiduals(model1_underheight)
+plot(res_model1_underheight)
+
+UHemmean=emmeans(model1_underheight, ~ Treatment)
+pairs(UHemmean, reverse = TRUE)
+summary(UHemmean,type = "response",infer = TRUE)
+((26.1-38.3)/38.3)*100
+
+
+
+understoryheight <- ggpredict(model1_underheight, terms = "Treatment")
+Punderstoryheight<-ggplot(understoryheight, aes(x = x, y = predicted)) +
+  geom_point(size = 3, color = "#87251D") +
+  geom_errorbar(aes(ymin = conf.low, ymax = conf.high), width = 0.15, color= "#87251D") +
+   geom_text(
+    aes(label = round(predicted, 1)),
+    vjust = -0.01,
+    hjust = 1.3,
+    size = 4) +
+  annotate(
+    "text",
+    x = Inf,
+    y = Inf,
+    label = "B",
+    hjust = 1.5,
+    vjust = 1.5,
+    size = 6,
+    fontface = "bold") +
+  labs(
+    x = "Treatment",
+    y = "Predicted Understory Height (in.)") +
+  theme(
+    aspect.ratio = 1)+
+  theme_minimal()
+print(Punderstoryheight)
+```
+
+Basal Area
+```{r}
+model1_BA<-glmmTMB(
+  log_sBA ~ Treatment + SiteClass,
+  family = gaussian,
+  data = Thor_data_BA)
+Anova(model1_BA, type=2)
+res_model1_BA<-simulateResiduals(model1_BA)
+plot(res_model1_BA)
+
+baemmean=emmeans(model1_BA, ~ Treatment)
+pairs(baemmean, reverse = TRUE)
+summary(baemmean,type = "response",infer = TRUE)
+((4.46-5.24)/5.24)*100
+
+baemm_df <- as.data.frame(baemmean)
+burnedba <- baemm_df$emmean[baemm_df$Treatment == "B"]
+unburnedba <- baemm_df$emmean[baemm_df$Treatment == "U"]
+bapercent_effect <- ((burnedba - unburnedba) / unburnedba) * 100
+bapercent_effect
+
+basalarea <- ggpredict(model1_BA, terms = "Treatment")
+Pbasalarea<-ggplot(basalarea, aes(x = x, y = predicted)) +
+  geom_point(size = 3, color = "#87251D") +
+  geom_errorbar(aes(ymin = conf.low, ymax = conf.high), width = 0.15, color= "#87251D") +
+  geom_text(
+    aes(label = round(predicted, 1)),
+    vjust = -0.01,
+    hjust = 1.3,
+    size = 4) +
+  annotate(
+    "text",
+    x = Inf,
+    y = Inf,
+    label = "C",
+    hjust = 1.5,
+    vjust = 1.5,
+    size = 6,
+    fontface = "bold"
+  ) +
+  
+  labs(
+    x = "Treatment",
+    y = "Predicted Basal Area (acre)") +
+  theme(
+    aspect.ratio = 1)+
+  theme_minimal()
+print(Pbasalarea)
+```
+
+Canopy Cover n=99 
+modeled in three parts due to boundary values — logistic regression for complete absence, logistic regression for complete presence, and Beta regression for intermediate proportions.
+```{r} 
+#logistic regression for canopy absence
+model1.1_canopy<- glmmTMB(
+  canopy_absence ~  Treatment + SiteClass,
+  family = binomial(),
+  data = Thor_data_canopy)
+Anova(model1.1_canopy, type=2)
+res_model1.1_canopy<-simulateResiduals(model1.1_canopy)
+plot(res_model1.1_canopy)
+
+canopya_treatment <- emmeans(model1.1_canopy,~ Treatment)
+pairs(canopya_treatment, reverse = TRUE)
+summary(canopya_treatment,type = "response",infer = TRUE)
+(0.6199-0.0229)*100 # percent point increase
+
+contrast(canopya_treatment, method = "pairwise", transform = "response")
+
+canopya <- ggpredict(model1.1_canopy, terms = "Treatment")
+Pcanopya<-ggplot(canopya, aes(x = x, y = predicted)) +
+  geom_point(size = 3, color = "#87251D") +
+  geom_errorbar(aes(ymin = conf.low, ymax = conf.high), width = 0.15, color= "#87251D") +
+   geom_text(aes(label = round(predicted, 1)),
+    vjust = -0.01,
+    hjust = 1.3,
+    size = 4) +
+  annotate(
+    "text",
+    x = Inf,
+    y = Inf,
+    label = "D",
+    hjust = 1.5,
+    vjust = 1.5,
+    size = 6,
+    fontface = "bold"
+  ) +
+  
+  labs(
+    x = "Treatment",
+    y = "Predicted Canopy Absence Probability") +
+  theme(
+    aspect.ratio = 1)+
+  theme_minimal()
+print(Pcanopya)
+
+#logistic regression for full canopy
+model1.2_canopy <- glmmTMB(
+  canopy_full ~ Treatment + scaled_baZ + SiteClass,
+  family = binomial(),
+  data = Thor_data_canopy)
+Anova(model1.2_canopy, type=2)
+res_model1.2_canopy<-simulateResiduals(model1.2_canopy)
+plot(res_model1.2_canopy) 
+
+canopyf_treatment <- emmeans(model1.2_canopy,~ Treatment, type = "link")
+pairs(canopyf_treatment, reverse = TRUE)
+summary(canopyf_treatment,type = "response",infer = TRUE)
+(0.114-0.428)*100 # percent point increase
+
+canopyp <- ggpredict(model1.2_canopy, terms = "Treatment")
+Pcanopyp<-ggplot(canopyp, aes(x = x, y = predicted)) +
+  geom_point(size = 3, color = "#87251D") +
+  geom_errorbar(aes(ymin = conf.low, ymax = conf.high), width = 0.15, color= "#87251D") +
+   geom_text(
+    aes(label = round(predicted, 1)),
+    vjust = -0.01,
+    hjust = 1.3,
+    size = 4) +
+  annotate(
+    "text",
+    x = Inf,
+    y = Inf,
+    label = "E",
+    hjust = 1.5,
+    vjust = 1.5,
+    size = 6,
+    fontface = "bold"
+  ) +
+  
+  labs(
+    x = "Treatment",
+    y = "Predicted Canopy Presence Probability") +
+   theme(
+    aspect.ratio = 1)+
+  theme_minimal()
+print(Pcanopyp)
+
+#Between 0 and 1
+model1.3_canopy <- glmmTMB(
+  canopycover ~ Treatment + scaled_baZ + SiteClass,
+  family = beta_family(),
+  data = Thor_data_canopy_middle)
+Anova(model1.3_canopy, type=2)
+res_model1.3_canopy<-simulateResiduals(model1.3_canopy)
+plot(res_model1.3_canopy)
+
+canopy_treatment <- emmeans(model1.3_canopy,~ Treatment, type = "link")
+pairs(canopy_treatment, reverse = TRUE)
+summary(canopy_treatment,type = "response",infer = TRUE)
+(0.407-0.659)*100 # percent point increase
+
+canopy <- ggpredict(model1.3_canopy, terms = "Treatment")
+Pcanopy<-ggplot(canopy, aes(x = x, y = predicted)) +
+  geom_point(size = 3, color = "#87251D") +
+  geom_errorbar(aes(ymin = conf.low, ymax = conf.high), width = 0.15, color= "#87251D") +
+  geom_text(
+    aes(label = round(predicted, 1)),
+    vjust = -0.01,
+    hjust = 1.3,
+    size = 4) +
+  annotate(
+    "text",
+    x = Inf,
+    y = Inf,
+    label = "F",
+    hjust = 1.5,
+    vjust = 1.5,
+    size = 6,
+    fontface = "bold") +
+  labs(
+    x = "Treatment",
+    y = "Predicted Canopy") +
+   theme(
+    aspect.ratio = 1)+
+  theme_minimal()
+print(Pcanopy)
+
+
+```
+
+Seedling Abundance 
+negative binomial model with a Treatment-based zero-inflation term, including Treatment × Aspect and Treatment × Elevation interactions and Slope; additional analyses examined how the Slope relationship and Treatment effect varied across Aspect and Elevation.
+```{r}
+model1_seedling <- glmmTMB(
+  SeedlingAbundance ~ Treatment * Aspect + ElevationZ + SlopeZ + SiteClass,
+  family = nbinom2,
+  ziformula = ~Treatment,
+  data = Thor_data)
+Anova(model1_seedling, type=3)
+res_model1_seedling<-simulateResiduals(model1_seedling)
+plot(res_model1_seedling)
+
+seedemmean=emmeans(model1_seedling, ~ Treatment, component = "cond", infer = c(TRUE, TRUE))
+pairs(seedemmean, reverse = TRUE)
+summary(seedemmean,type = "response",infer = TRUE)
+((48.0-10.3)/10.3)*100
+
+
+seedemm_df <- as.data.frame(seedemmean)
+burnedseed <- seedemm_df$emmean[seedemm_df$Treatment == "B"]
+unburnedseed <- seedemm_df$emmean[seedemm_df$Treatment == "U"]
+seedpercent_effect <- ((burnedseed - unburnedseed) / unburnedseed) * 100
+seedpercent_effect
+
+seed <- ggpredict(model1_seedling, terms = "Treatment")
+Pseedling<-ggplot(seed, aes(x = x, y = predicted)) +
+  geom_point(size = 3, color = "#87251D") +
+  geom_errorbar(aes(ymin = conf.low, ymax = conf.high), width = 0.15, color= "#87251D") +
+  geom_text(
+    aes(label = round(predicted, 1)),
+    vjust = -0.01,
+    hjust = 1.3,
+    size = 4) +
+  annotate(
+    "text",
+    x = Inf,
+    y = Inf,
+    label = "G",
+    hjust = 1.5,
+    vjust = 1.5,
+    size = 6,
+    fontface = "bold"
+  ) +
+  labs(
+    x = "Treatment",
+    y = "Predicted Seedling Abundance") +
+   theme(
+    aspect.ratio = 1)+
+  theme_minimal()
+print(Pseedling)
+
+seedslopeeff<-emtrends(model1_seedling, ~ SlopeZ, var = "SlopeZ", infer = c(TRUE, TRUE))
+seedslopeeff
+seedsl <- ggpredict(model1_seedling, terms = "SlopeZ")
+ggplot(seedsl, aes(x = x, y = predicted)) +
+  geom_line(linewidth = 1, color = "#6a2e35") +
+  geom_ribbon(aes(ymin = conf.low, ymax = conf.high),
+              alpha = 0.2, fill = "#6a2e35") +
+  geom_point(data = Thor_data,
+             aes(x = SlopeZ, y = SeedlingAbundance),
+             inherit.aes = FALSE,
+             alpha = 0.5, color = "black") +
+  labs(
+    x = "Slope (standardized)",
+    y = "Predicted Abundance") +
+  theme_classic()
+
+stamean=emmeans(model1_seedling, ~ Treatment|Aspect, infer = c(TRUE, TRUE))
+pairs(stamean)
+
+STA <- ggpredict(model1_seedling,
+                  terms = c("Aspect","Treatment"))
+ggplot(STA, aes(x = x, y = predicted, color = group)) +
+  geom_point(size = 3, position = position_dodge(width = 0.3)) +
+  geom_errorbar(aes(ymin = conf.low, ymax = conf.high),
+                width = 0.2,
+                position = position_dodge(width = 0.3)) +
+  scale_color_manual(values = Treatmentcol, labels = c("Unburned", "Burned")) +
+  scale_fill_manual(values = Treatmentcol) +
+  labs(
+    x = "Aspect",
+    y = "Predicted Seedling Abundance",
+    color = "Burn Status") +
+  theme_classic()
+
+```
+
+Sapling Abundance
+negative binomial model on Treatment, aspect, and Site Class
+```{r}
+model1_sapling <- glmmTMB(
+  SaplingAbundance ~ Treatment * Aspect + SiteClass,
+  family = nbinom2(),
+  ziformula = ~ Treatment,
+  data = Thor_data)
+Anova(model1_sapling, type=3)
+res_model1_sapling<-simulateResiduals(model1_sapling)
+plot(res_model1_sapling)
+
+sapemmean <- emmeans(model1_sapling,~ Treatment, type = "response")
+pairs(sapemmean, reverse = TRUE)
+summary(sapemmean,type = "response",infer = TRUE)
+((0.00103-2.61984)/2.61984)*100
+
+sapemm_df <- as.data.frame(sapemmean)
+burnedsap <- sapemm_df$emmean[sapemm_df$Treatment == "B"]
+unburnedsap <- sapemm_df$emmean[sapemm_df$Treatment == "U"]
+sappercent_effect <- ((burnedsap - unburnedsap) / unburnedsap) * 100
+sappercent_effect
+
+
+sap <- ggpredict(model1_sapling, terms = "Treatment")
+PSapling<-ggplot(sap, aes(x = x, y = predicted)) +
+  geom_point(size = 3, color = "#87251D") +
+  geom_errorbar(aes(ymin = conf.low, ymax = conf.high), width = 0.15, color= "#87251D") +
+  geom_text(
+    aes(label = round(predicted, 1)),
+    vjust = -0.01,
+    hjust = 1.3,
+    size = 4) +
+  annotate(
+    "text",
+    x = Inf,
+    y = Inf,
+    label = "H",
+    hjust = 1.5,
+    vjust = 1.5,
+    size = 6,
+    fontface = "bold"
+  ) +
+  labs(
+    x = "Treatment",
+    y = "Predicted Sapling Abundance") +
+   theme(
+    aspect.ratio = 1)+
+  theme_minimal()
+print(PSapling)
+
+saptamean=emmeans(model1_sapling, ~ Treatment|Aspect, infer = c(TRUE, TRUE))
+pairs(saptamean)
+SapTA <- ggpredict(model1_sapling,
+                  terms = c("Aspect","Treatment"))
+ggplot(SapTA, aes(x = x, y = predicted, color = group)) +
+  geom_point(size = 3, position = position_dodge(width = 0.3)) +
+  geom_errorbar(aes(ymin = conf.low, ymax = conf.high),
+                width = 0.2,
+                position = position_dodge(width = 0.3)) +
+  scale_color_manual(values = Treatmentcol, labels = c("Unburned", "Burned")) +
+  scale_fill_manual(values = Treatmentcol) +
+  labs(
+    x = "Aspect",
+    y = "Predicted Sapling Abundance",
+    color = "Burn Status") +
+  theme_classic()
+
+```
+
+Tree Mortality
+modeled in three parts, mirroring canopy cover (complete survival, complete mortality, and Beta regression for intermediate proportions)
+```{r}
+#logistic regression for 0% mortality
+model1.1_mortality <- glmmTMB(
+  AllLive ~ Treatment + scaled_ba + SiteClass,
+  family = binomial(),
+  data = Thor_data_mortality)
+Anova(model1.1_mortality, type=2)
+res_model1.1_mortality<-simulateResiduals(model1.1_mortality)
+plot(res_model1.1_mortality)
+testUniformity(res_model1.1_mortality)
+testDispersion(res_model1.1_mortality)
+
+mortalitya_treatment <- emmeans(model1.1_mortality,~ Treatment, type = "link")
+pairs(mortalitya_treatment, reverse = TRUE)
+summary(mortalitya_treatment,type = "response",infer = TRUE)
+(0.157-0.324)*100 # percent point increase
+
+mortalitya <- ggpredict(model1.1_mortality, terms = "Treatment")
+Pmortalitya<-ggplot(mortalitya, aes(x = x, y = predicted)) +
+  geom_point(size = 3, color = "#87251D") +
+  geom_errorbar(aes(ymin = conf.low, ymax = conf.high), width = 0.15, color= "#87251D") +
+  geom_text(
+    aes(label = round(predicted, 1)),
+    vjust = -0.01,
+    hjust = 1.3,
+    size = 4) +
+  annotate(
+    "text",
+    x = Inf,
+    y = Inf,
+    label = "I",
+    hjust = 1.5,
+    vjust = 1.5,
+    size = 6,
+    fontface = "bold"
+  ) +
+   theme(
+    aspect.ratio = 1)+
+  labs(
+    x = "Treatment",
+    y = "Predicted Mortality Absence") +
+  theme_minimal()
+print(Pmortalitya)
+
+#logistic regression for 100% mortality
+model1.2_mortality <- glmmTMB(
+  AllDead ~ Treatment + SlopeZ + SiteClass,
+  family = binomial(),
+  data = Thor_data_mortality)
+Anova(model1.2_mortality, type=2)
+res_model1.2_mortality<-simulateResiduals(model1.2_mortality)
+plot(res_model1.2_mortality)
+testUniformity(res_model1.2_mortality)
+testDispersion(res_model1.2_mortality)
+
+mortalityp_treatment <- emmeans(model1.2_mortality,~ Treatment, type = "link")
+pairs(mortalityp_treatment, reverse = TRUE)
+summary(mortalityp_treatment,type = "response",infer = TRUE)
+(0.258-0.000)*100 # percent point increase
+
+mortalityp <- ggpredict(model1.2_mortality, terms = "Treatment")
+Pmortalityp<-ggplot(mortalityp, aes(x = x, y = predicted)) +
+  geom_point(size = 3, color = "#87251D") +
+  geom_errorbar(aes(ymin = conf.low, ymax = conf.high), width = 0.15, color= "#87251D") +
+  geom_text(
+    aes(label = round(predicted, 1)),
+    vjust = -0.01,
+    hjust = 1.3,
+    size = 4) +
+  annotate(
+    "text",
+    x = Inf,
+    y = Inf,
+    label = "J",
+    hjust = 1.5,
+    vjust = 1.5,
+    size = 6,
+    fontface = "bold"
+  ) +
+  labs(
+    x = "Treatment",
+    y = "Predicted Mortality Presence") +
+   theme(
+    aspect.ratio = 1)+
+  theme_minimal()
+print(Pmortalityp)
+
+
+#Between 0 and 1
+model1.3_mortality <- glmmTMB(
+  prop.density.dead ~ Treatment * SlopeZ + SiteClass,
+  family = beta_family(),
+  data = Thor_data_mortality_middle)
+Anova(model1.3_mortality, type=2)
+res_model1.3_mortality<-simulateResiduals(model1.3_mortality)
+plot(res_model1.3_mortality)
+testUniformity(res_model1.3_mortality)
+testDispersion(res_model1.3_mortality)
+
+mortality_treatment <- emmeans(model1.3_mortality,~ Treatment, type = "link")
+pairs(mortality_treatment, reverse = TRUE)
+summary(mortality_treatment,type = "response",infer = TRUE)
+(0.662-0.257)*100 # percent point increase
+
+mortality <- ggpredict(model1.3_mortality, terms = "Treatment")
+Pmortality<-ggplot(mortality, aes(x = x, y = predicted)) +
+  geom_point(size = 3, color = "#87251D") +
+  geom_errorbar(aes(ymin = conf.low, ymax = conf.high), width = 0.15, color= "#87251D") +
+  geom_text(
+    aes(label = round(predicted, 1)),
+    vjust = -0.01,
+    hjust = 1.3,
+    size = 4) +
+  annotate(
+    "text",
+    x = Inf,
+    y = Inf,
+    label = "K",
+    hjust = 1.5,
+    vjust = 1.5,
+    size = 6,
+    fontface = "bold") +
+  labs(
+    x = "Treatment",
+    y = "Predicted Mortality") +
+   theme(
+    aspect.ratio = 1)+
+  theme_minimal()
+print(Pmortality)
+
+```
+
+[Objective 2: Assess baseline differences in fuels between control and impact sites]
+Fuel models (woody fuels and litter/duff depth) regressed fuel load or litter/ duff depth on the interaction of Fuel Type with Treatment, Elevation, Slope, and Aspect, plus Site Class, using a Tweedie distribution with fuel-type-specific dispersion. Estimated marginal means and pairwise contrasts were calculated for the Treatment × Fuel Type interaction, and percent effect sizes were calculated by hand for each fuel type. Predicted fuel loads by Treatment and Fuel Type were plotted on a log scale, and the Slope and Elevation relationships within each fuel type were visualized using emtrends and predicted-value line plots.
+
+Fuels
+```{r}
+model1_fuels<- glmmTMB(Load ~ FuelType *(Treatment + ElevationZ + SlopeZ + Aspect)+SiteClass,
+                         dispformula = ~ FuelType,
+                         family = tweedie(link= "log"),
+                         data=Thor_data_fuels)
+Anova(model1_fuels,type=3)
+res_model1_fuels<-simulateResiduals(model1_fuels)
+plot(res_model1_fuels)
+
+
+Fuels_treatment <- emmeans(model1_fuels,~ Treatment|FuelType, type = "link")
+pairs(Fuels_treatment, reverse = TRUE)
+summary(Fuels_treatment,type = "response",infer = TRUE)
+
+#Forb 
+((0.1283-0.0491)/0.0491)*100
+#shrub
+((0.1380-0.3069)/0.3069)*100
+#grass
+((0.0262-0.0162)/0.0162)*100
+#1-hour
+((0.7310-0.9441)/0.9441)*100
+#10-hour
+((0.3652-1.0289)/1.0289)*100
+#100-hour
+((0.2549-0.4767)/0.4767)*100
+#1000-hour
+((10.1716-25.8432)/25.8432)*100
+
+pred_FT_Treat <- ggpredict(model1_fuels, terms = c("Treatment", "FuelType"))
+ggplot(pred_FT_Treat, aes(x = x, y = predicted, color = x)) +
+  geom_point(size = 3, position = position_dodge(width = 0.3)) +
+  geom_errorbar(aes(ymin = conf.low, ymax = conf.high),
+                width = 0.2,
+                position = position_dodge(width = 0.3)) +
+  scale_y_log10() +
+  facet_wrap(~ group, scales = "free_y") +
+  labs(
+    x = "Burn Status",
+    y = "Predicted Fuel Load (log scale)",
+    color = "Burn Status"
+  ) +
+  scale_color_manual(values = Treatmentcol) +
+  theme_classic()
+
+Fuels_slope <- emtrends(model1_fuels, ~ FuelType | SlopeZ,
+                        var = "SlopeZ", type = "link",inf=TRUE)
+Fuels_slope
+FS <- ggpredict(model1_fuels,
+                terms = c("SlopeZ","FuelType"))
+
+ggplot(FS, aes(x = x, y = predicted)) +
+  geom_line(linewidth = 1.5, color = "#274001") +
+  geom_ribbon(aes(ymin = conf.low, ymax = conf.high),
+              alpha = 0.2, fill = "#274001") +
+  scale_y_log10() +
+  facet_wrap(~ group) +
+  labs(
+    x = "SlopeZ",
+    y = "Predicted Fuel Load (log scale)"
+  ) +
+  theme_classic()
+
+Fuels_aspect <- emmeans(model1_fuels,~ FuelType|Aspect, type = "link")
+contrast(Fuels_aspect, method = "pairwise", transform = "response")
+
+Fuels_e <- emtrends(model1_fuels, ~ FuelType | ElevationZ,
+                        var = "ElevationZ", type = "link",inf=TRUE)
+Fuels_e
+
+Fe <- ggpredict(model1_fuels,
+                  terms = c("ElevationZ","FuelType"))
+ggplot(Fe, aes(x = x, y = predicted)) +
+  geom_line(linewidth = 1.5, color = "#274001") +
+  geom_ribbon(aes(ymin = conf.low, ymax = conf.high),
+              alpha = 0.2, fill = "#274001") +
+  scale_y_log10() +
+  facet_wrap(~ group) +
+  labs(
+    x = "ElevationZ",
+    y = "Predicted Fuel Load (log scale)"
+  ) +
+  theme_classic()
+
+
+Fuels_elev_treat <- emtrends(model1_fuels, ~ Treatment | FuelType,var = "ElevationZ",infer = c(TRUE, TRUE))
+Fuels_elev_treat
+FE <- ggpredict(
+  model1_fuels,
+  terms = c("ElevationZ", "FuelType", "Treatment"))
+FE
+
+```
+Litter and Duff 
+```{r}
+model1_LD<-glmmTMB(Depth~ Type * Treatment + SiteClass,
+                     family=tweedie(link = "log"),
+                     data=Thor_data_LD)
+Anova(model1_LD,type=3)
+res_model1_LD<-simulateResiduals(model1_LD)
+plot(res_model1_LD)
+
+LD_treatment <- emmeans(model1_LD,~ Treatment|Type, type = "fixed")
+pairs(LD_treatment, reverse = TRUE)
+summary(LD_treatment,type = "response",infer = TRUE)
+
+#Duff
+((0.445-2.067)/2.067)*100
+
+#litter
+((0.308-0.382)/0.382)*100
+
+pred_LD_Treat <- ggpredict(model1_LD,
+                           terms = c("Type", "Treatment"))
+ggplot(pred_LD_Treat, aes(x = x, y = predicted, fill = group)) +
+  geom_col(position = position_dodge(width = 0.9)) +
+  geom_errorbar(aes(ymin = conf.low, ymax = conf.high),
+                position = position_dodge(width = 0.9),
+                width = 0.2) +
+  scale_x_discrete(labels = c(
+  "mean_litter" = "Litter",
+  "mean_duff" = "Duff"))+
+  labs(
+    x = "Burn Status",
+    y = "Predicted Mean Depth",
+    fill = "Burn Status"
+  ) +
+  scale_fill_manual(values = Treatmentcol) +
+  theme_classic()
+
+
+
+
+```
+
+[Objective 3: Assess baseline differences in forest community between control and impact sites]
+Differences in mature tree species composition between Treatments were tested with a PERMANOVA (adonis2) on Bray-Curtis dissimilarities, with the dispersion assumption checked using betadisper. Composition patterns were visualized with an NMDS ordination with 95% confidence ellipses by Treatment, and indicator species associated with each Treatment were identified using the indicspecies package (multipatt).Separate Gaussian models regressed Hill-Shannon diversity — calculated once for all mature trees and once restricted to surviving (live) trees — on Treatment and Site Class. For each model, estimated marginal means, pairwise contrasts, and percent effect size were calculated for the Treatment effect.
+
+Mature Tree Species Composition with NMDS
+```{r}
+bray_dist <- vegdist(comm_SC, method = "bray")
+##Is multivariate species composition different between treatments?
+set.seed(123)
+adonis2(bray_dist ~ Treatment, data = LT_2)
+
+#assumption check for PERMANOVA
+set.seed(123)
+disp <- betadisper(bray_dist, LT_2$Treatment)
+anova(disp)
+
+nmds_SC <- metaMDS(comm_SC, k = 2, trymax = 50)
+nmds_SC <- as.data.frame(nmds_SC$points)
+nmds_SC <- cbind(nmds_SC,LT_2["Treatment"])
+
+ggplot(nmds_SC, aes(MDS1, MDS2, color = Treatment, fill = Treatment)) +
+  stat_ellipse(geom = "polygon",
+               level = 0.95,
+               alpha = 0.15) +
+  geom_point(size = 3) +
+  theme_minimal() +
+  scale_color_manual(values = Treatmentcol) +
+  scale_fill_manual(values = Treatmentcol) +
+  labs(
+    x = "NMDS1",
+    y = "NMDS2",
+    color = "Burn Status",
+    fill = "Burn Status")
+
+
+##indicator Species 
+#citation("indicspecies")
+isa <- multipatt(comm_SC, LT_2$Treatment, 
+                 func = "IndVal.g", 
+                 control = how(nperm = 999))
+summary(isa)
+```
+Mature Tree Diversity n=99
+```{r}
+model1_TD <- glmmTMB(
+  HillShannon ~ Treatment + SiteClass,
+  family = gaussian(),
+  data = Thor_data)
+Anova(model1_TD, type=3)
+res_model1_TD<-simulateResiduals(model1_TD)
+plot(res_model1_TD)
+
+
+TD_fire<-emmeans(model1_TD, "Treatment")
+pairs(TD_fire, reverse = TRUE)
+summary(TD_fire,type = "response",infer = TRUE)
+((1.99-2.73)/2.73)*100
+
+```
+Live Tree Survivors Diversity n=97
+```{r}
+model1_LTD <- glmmTMB(
+  HillLive ~ Treatment + SiteClass,
+  family = gaussian(),
+  data = Thor_data)
+Anova(model1_LTD, type=3)
+res_model1_LTD<-simulateResiduals(model1_LTD)
+plot(res_model1_LTD)
+
+LTD_fire<-emmeans(model1_LTD, "Treatment")
+pairs(LTD_fire, reverse = TRUE)
+summary(LTD_fire,type = "response",infer = TRUE)
+((2.36-2.27)/2.27)*100
+```
+
+Objective 4: Determine effects of severity in burned sites
+For each response variable examined under Objective 1–3 (fuels, recruitment/seedling and sapling abundance, litter/duff depth, canopy cover, and stand height), an analogous model was refit using Severity in place of Treatment as the primary predictor, restricted to burned plots. Estimated marginal means were calculated for Severity (or the Severity × Type / Severity × Fuel Type interaction where relevant), with polynomial contrasts used to test for a linear or higher-order trend across ordered severity levels and pairwise contrasts used to compare adjacent severity classes. Percent change between adjacent severity levels was calculated by hand from the back-transformed estimates for each response variable and level. Predicted values were visualized as bar charts (scaled where necessary for comparability across fuel types) or line plots across severity levels, with consistent color scales (cols_sev) applied across figures.
+
+Fuels
+```{r}
+model2_fuels<- glmmTMB(Load ~ FuelType * Severity + SiteClass,
+                         dispformula = ~ FuelType,
+                         family = tweedie(link= "log"),
+                         data=Thor_data_fuels_sev)
+Anova(model2_fuels, type=3)
+res_model2_fuels<-simulateResiduals(model2_fuels)
+plot(res_model2_fuels)
+
+FuelSInteraction=emmeans(model2_fuels, ~ Severity|FuelType, infer = c(TRUE, TRUE))
+contrast(FuelSInteraction,method = "poly",type="response")
+#post-hoc pairwise 
+contrast(FuelSInteraction,method = "pairwise",type="response")
+summary(FuelSInteraction,type = "response",infer = TRUE)
+
+ 
+#forb
+#low-no
+((0.0846-0.0559)/0.0559)*100
+#med-low
+((0.1724-0.0846)/0.0846)*100
+#high-med
+((0.1451 -0.1724)/0.1724)*100
+#extreme-high
+((0.0855-0.1451)/0.1451)*100
+
+#Shrub
+#low-no
+((0.1393-0.4192)/0.4192)*100
+#med-low
+(( 0.1248 -0.1393)/0.1393)*100
+#high-med
+((0.5142-0.1248)/0.1248)*100
+#extreme-high
+((0.0514- 0.5142)/ 0.5142)*100
+
+#Grass
+#low-no
+((0.0324- 0.0464)/ 0.0464)*100
+#med-low
+((0.0639-0.0324)/0.0324)*100
+#high-med
+((0.0135- 0.0639)/ 0.0639)*100
+#extreme-high
+((0.0705-0.0135)/0.0135)*100
+
+#1-hour
+#low-no
+((0.8135- 1.0774)/ 1.0774)*100
+#med-low
+(( 0.8218-  0.8135)/  0.8135)*100
+#high-med
+((0.2438- 0.8218)/ 0.8218)*100
+#extreme-high
+((0.1243-0.2438)/0.2438)*100
+
+#10-hour
+#low-no
+((0.3414-1.0603)/1.0603)*100
+#med-low
+((0.6089-  0.3414)/  0.3414)*100
+#high-med
+((0.0895-0.6089)/0.6089)*100
+#extreme-high
+((0.0926- 0.0895)/ 0.0895)*100
+
+#100-hour
+#low-no
+((0.3304-0.5781)/0.5781)*100
+#med-low
+((0.4178-0.3304)/0.3304)*100
+#high-med
+(( 0.1883- 0.4178)/ 0.4178)*100
+#extreme-high
+(( 0.4178-0.1883 )/0.1883)*100
+
+#1000-houe
+#low-no
+(( 9.1234- 26.6647)/ 26.6647)*100
+#med-low
+(( 7.4694-  9.1234)/  9.1234)*100
+#high-med
+((13.3748-7.4694)/7.4694)*100
+#extreme-high
+((19.9060-  13.3748 )/  13.3748 )*100
+
+plot(FuelSInteraction)
+
+pred_FuelS <- ggpredict(model2_fuels, terms = c("FuelType", "Severity"))
+pred_FuelS <- pred_FuelS %>%
+  group_by(x) %>%
+  mutate(pred_scaled = predicted / max(predicted),
+         conf.low_scaled = conf.low / max(predicted),
+         conf.high_scaled = conf.high / max(predicted)) %>%
+  ungroup() %>%                     
+  mutate(group = factor(group,       
+                        levels = c("No", "Low", "Medium", "High", "Extreme")))%>%
+  mutate(conf.high_scaled = ifelse(conf.high_scaled > 2.5, 2.5, conf.high_scaled))
+
+ggplot(pred_FuelS,
+       aes(x = group, y = pred_scaled, fill = group)) +
+  geom_col() +
+  geom_errorbar(aes(ymin = conf.low_scaled, ymax = conf.high_scaled),
+                width = 0.2) +
+  facet_wrap(~ x, ncol = 4) + 
+  labs(x = "Severity",
+       y = "Predicted Fuel Load (scaled)",
+       fill = "Severity") +
+  scale_fill_manual(values = cols_sev) +
+  theme_classic() + 
+  theme(
+    axis.text.x = element_blank(),   
+    axis.ticks.x = element_blank(),
+    
+    axis.title.x = element_text(size = 14, face = "bold"),
+    axis.title.y = element_text(size = 14, face = "bold"),
+    
+    axis.text.y = element_text(size = 12, face = "bold"),
+    legend.title = element_text(size = 13, face = "bold"),
+    legend.text = element_text(size = 12))
+
+```
+
+Recruitment
+```{r}
+##Recruitment
+Thor_data_recruitment$Type<-as.factor(Thor_data_recruitment$Type)
+model2_recruitment<-glmmTMB(Abundance ~ Type * Severity + SiteClass,
+                            family=nbinom2(), 
+                            ziformula = ~ Treatment,
+                            data=Thor_data_recruitment_sev)
+Anova(model2_recruitment,type=3)
+res_model2_recruitment<-simulateResiduals(model2_recruitment)
+plot(res_model2_recruitment)
+
+recruitment_severity <- emmeans(model2_recruitment,~ Severity|Type, type = "response")
+contrast(recruitment_severity,method = "poly",type="response")
+contrast(recruitment_severity,method = "pairwise", type="response")
+summary(recruitment_severity,type = "response",infer = TRUE)
+#seedling
+#low-no
+((53.989 - 15.119)/15.119)*100
+#med-low
+((57.479-53.989)/53.989)*100
+#high-med
+((33.041- 57.479)/ 57.479)*100
+#extreme-high
+((37.643-33.041 )/33.041 )*100
+
+#sapling
+#low-no
+((0.502- 5.920)/ 5.920)*100
+##med-low
+((0.365 - 0.502)/ 0.502)*100
+#high-med
+((0.414-0.365)/0.365)*100
+#extreme-high
+((0-0.414)/0.414)*100
+
+pairs(recruitment_severity)
+plot(recruitment_severity)
+
+pred_recruitment <- ggpredict(model2_recruitment, terms = c("Type", "Severity"))
+pred_recruitment <- pred_recruitment %>%
+  group_by(x) %>%
+  mutate(pred_scaled = predicted / max(predicted),
+         conf.low_scaled = conf.low / max(predicted),
+         conf.high_scaled = conf.high / max(predicted)) %>%
+  ungroup() %>%                     
+  mutate(group = factor(group,       
+                        levels = c("No", "Low", "Medium", "High", "Extreme")))
+
+
+ggplot(pred_recruitment,
+       aes(x = group, y = predicted, fill = group)) +
+  geom_col() +
+  geom_errorbar(
+    aes(ymin = conf.low, ymax = conf.high),
+    width = 0.2) +
+  facet_wrap( ~ x, scales = "free_y",
+  labeller = as_labeller(c(
+    "SaplingAbundance" = "Sapling",
+    "SeedlingAbundance" = "Seedling"))) +
+  labs(
+    x = "Severity",
+    y = "Predicted Abundance",
+    fill = "Severity") +
+  scale_fill_manual(values = cols_sev) +
+  theme_classic() + 
+   theme(
+    axis.text.x = element_blank(),   
+    axis.ticks.x = element_blank(),
+    
+    axis.title.x = element_text(size = 14, face = "bold"),
+    axis.title.y = element_text(size = 14, face = "bold"),
+    
+    axis.text.y  = element_text(size = 12, face = "bold"),
+    
+    legend.title = element_text(size = 13, face = "bold"),
+    legend.text  = element_text(size = 12),
+    
+    strip.text = element_text(size = 13, face = "bold"))
+
+```
+
+Detritus
+```{r}
+model2_LD<-glmmTMB(Depth~ Type * Severity + SiteClass,
+                     family=tweedie(link = "log"),
+                     data=Thor_data_LD_sev)
+Anova(model2_LD,type=3)
+res_model2_LD<-simulateResiduals(model2_LD)
+plot(res_model2_LD)
+
+LD_severity <- emmeans(model2_LD,~ Severity|Type, type = "response")
+contrast(LD_severity,method = "poly", type="response")
+contrast(LD_severity,method = "pairwise", type= "response")
+summary(LD_severity,type = "response",infer = TRUE)
+
+#duff
+#low-no
+((0.517 - 0.103)/ 0.103)*100
+#med-low
+((0.501-0.517)/0.517)*100
+#high-med
+((0.452-0.501)/0.501)*100
+#extreme-high
+((1.978- 0.452)/ 0.452)*100
+
+#litter
+#low-no
+((0.487 -0.103)/0.103)*100
+#med-low
+((0.304- 0.487)/ 0.487)*100
+#high-med
+(( 0.338-0.304)/0.304)*100
+#extreme-high
+((0.362-0.338)/0.338)*100
+
+
+pred_LD <- ggpredict(model2_LD, terms = c("Type", "Severity"))
+
+ggplot(pred_LD,
+       aes(x = group, y = predicted, fill = group)) +
+  geom_col() +
+  geom_errorbar(
+    aes(ymin = conf.low, ymax = conf.high),
+    width = 0.2) +
+  facet_wrap(
+    ~ x,
+    labeller = as_labeller(c(
+      "mean_duff" = "Duff",
+      "mean_litter" = "Litter"))) + 
+  labs(
+    x = "Severity",
+    y = "Predicted Mean Depth",
+    fill = "Severity") +
+  scale_fill_manual(values = cols_sev) +
+  theme_classic() + 
+  theme(
+    axis.text.x = element_blank(),   
+    axis.ticks.x = element_blank(),
+    axis.title.x = element_text(size = 14, face = "bold"),
+    axis.title.y = element_text(size = 14, face = "bold"),
+    axis.text.y  = element_text(size = 12, face = "bold"),
+    legend.title = element_text(size = 13, face = "bold"),
+    legend.text  = element_text(size = 12),
+    strip.text = element_text(size = 13, face = "bold"))
+```
+
+Canopy Cover
+```{r}
+#logistic regression for canopy absence
+model2.1_canopy <- glmmTMB(
+  canopy_absence ~ Severity + scaled_baZ + SiteClass,
+  family = binomial(),
+  data = Thor_data_canopy_sev)
+Anova(model2.1_canopy, type=2)
+res_model2.1_canopy<-simulateResiduals(model2.1_canopy)
+plot(res_model2.1_canopy)
+
+canopyabs_severity <- emmeans(model2.1_canopy,~ Severity, type = "response")
+pairs(canopyabs_severity)
+
+plot(ggpredict(model2.1_canopy, "Severity"))   
+
+
+#logistic regression for full canopy
+model2.2_canopy <- glmmTMB(
+  canopy_full ~ Severity + scaled_baZ + SiteClass,
+  family = binomial(),
+  data = Thor_data_canopy_sev)
+Anova(model2.2_canopy, type=2)
+res_model2.2_canopy<-simulateResiduals(model2.2_canopy)
+plot(res_model2.2_canopy)
+
+canopypres_severity <- emmeans(model2.2_canopy,~ Severity, type = "response")
+pairs(canopypres_severity)
+
+#Between 0 and 1
+model2.3_canopy <- glmmTMB(
+  canopycover ~ Severity + scaled_baZ + SiteClass,
+  family = beta_family(),
+  data = Thor_data_canopy_middle_sev)
+Anova(model2.3_canopy, type=2)
+res_model2.3_canopy<-simulateResiduals(model2.3_canopy)
+plot(res_model2.3_canopy)
+testUniformity(res_model2.3_canopy)
+testDispersion(res_model2.3_canopy)
+
+canopy_severity <- emmeans(model2.3_canopy,~ Severity, type = "response")
+contrast(canopy_severity,method = "poly", type="response")
+contrast(canopy_severity,method = "pairwise", type="response")
+summary(canopy_severity,type = "response",infer = TRUE)
+
+#low/no
+(0.520- 0.666)*100
+#medium/low
+( 0.313 -0.520)*100
+#high/medium
+( 0.400-0.313 )*100
+
+plot(ggpredict(model2.3_canopy,terms=c("Severity","SiteClass")))   
+
+canopy_severity <- as.data.frame(canopy_severity)
+
+ggplot(canopy_severity,
+       aes(x = Severity, y = response, fill = Severity)) +
+  geom_col() +
+  geom_errorbar(aes(ymin = asymp.LCL,
+                    ymax = asymp.UCL),
+                width = 0.2) +
+  labs(
+    x = "Severity",
+    y = "Predicted Canopy Cover (%)",
+    fill = "Severity"
+  ) +
+  scale_fill_manual(values = cols_sev) +
+  theme_classic() +
+  theme(
+    axis.text.x  = element_blank(),
+    axis.ticks.x = element_blank(),
+    
+    axis.title.x = element_text(size = 20, face = "bold"),
+    axis.title.y = element_text(size = 20, face = "bold"),
+    
+    axis.text.y  = element_text(size = 20, face = "bold"),
+    
+    legend.title = element_text(size = 20, face = "bold"),
+    legend.text  = element_text(size = 15))
+
+```
+
+Stand Height
+```{r}
+model2_standheight<-glmmTMB(
+  `Stand Height (ft.)` ~ Severity + scaled_baZ + SiteClass,
+  family = gaussian,
+  data = Thor_data_sev)
+Anova(model2_standheight, type=2)
+res_model2_standheight<-simulateResiduals(model2_standheight)
+plot(res_model2_standheight)
+
+SH_severity <- emmeans(model2_standheight,~ Severity, type = "link")
+contrast(SH_severity,method = "poly", type= "response")
+contrast(SH_severity,method = "pairwise", type="response")
+summary(SH_severity,type = "response",infer = TRUE)
+
+#low-no
+((57.9-65.4)/65.4)*100
+#med-low
+((61.4-57.9)/57.9)*100
+#high-med
+(( 62.7-61.4)/61.4)*100
+#extreme-high
+((76.6-62.7)/62.7)*100
+
+pred_SH <- ggpredict(model2_standheight, terms = "Severity")
+ggplot(pred_SH,
+       aes(x =x, y = predicted, fill = x)) +
+  geom_col() +
+  geom_errorbar(aes(ymin = conf.low, ymax = conf.high),
+                width = 0.2) +
+  labs(x = "Severity",
+       y = "Predicted Stand Height",
+       fill = "Severity") +
+  scale_fill_manual(values = cols_sev) +
+  theme_classic() + 
+  theme(
+     axis.text.x = element_blank(),
+  axis.ticks.x = element_blank(),
+    axis.title.x = element_text(size = 20, face = "bold"),
+    axis.title.y = element_text(size = 20, face = "bold"),
+    
+    axis.text.y  = element_text(size = 20, face = "bold"),
+    
+    legend.title = element_text(size = 20, face = "bold"),
+    legend.text  = element_text(size = 15))
+```
+
+Individual prediction plots generated for each forest structure response variable (stand height, understory height, basal area, canopy presence/absence/percent, seedling and sapling abundance, and mortality presence/absence/percent) were relabeled with shared titles and formatting, then assembled into a single multi-panel figure using patchwork. Shared x- and y-axis labels were added as separate blank ggplot panels and combined with the response-variable panels using plot_layout() to produce one composite figure with a single external axis label rather than repeated labels on each subplot.
+
+```{r}
+
+#Forest Structure 
+Pstandheight = Pstandheight +
+  labs(x = NULL, y = NULL, title = "Stand Height (ft.)") +
+  theme(plot.title = element_text(face = "bold"))
+Punderstoryheight = Punderstoryheight +
+  labs(x = NULL, y = NULL, title = "Understory Height (in.)") +
+  theme(plot.title = element_text(face = "bold"))
+Pbasalarea = Pbasalarea +
+  labs(x = NULL, y = NULL, title = "Basal Area (acre)") +
+  theme(plot.title = element_text(face = "bold"))
+Pcanopya = Pcanopya +
+  labs(x = NULL, y = NULL, title = "Canopy (A)") +
+  theme(plot.title = element_text(face = "bold"))
+Pcanopyp = Pcanopyp +
+  labs(x = NULL, y = NULL, title = "Canopy (P)") +
+  theme(plot.title = element_text(face = "bold"))
+Pcanopy = Pcanopy +
+  labs(x = NULL, y = NULL, title = "Canopy%") +
+  theme(plot.title = element_text(face = "bold"))
+Pseedling = Pseedling +
+  labs(x = NULL, y = NULL, title = "#Seedling") +
+  theme(plot.title = element_text(face = "bold"))
+PSapling = PSapling +
+  labs(x = NULL, y = NULL, title = "#Sapling") +
+  theme(plot.title = element_text(face = "bold"))
+Pmortalitya = Pmortalitya +
+  labs(x = NULL, y = NULL, title = "Mortality (A)") +
+  theme(plot.title = element_text(face = "bold"))
+Pmortalityp = Pmortalityp +
+  labs(x = NULL, y = NULL, title = "Mortality (P)") +
+  theme(plot.title = element_text(face = "bold"))
+Pmortality = Pmortality +
+  labs(x = NULL, y = NULL, title = "Mortality%") +
+  theme(plot.title = element_text(face = "bold"))
+# Y-axis panel
+y_axis_plot <- ggplot() + 
+  geom_blank() +
+  labs(y = "Predicted Marginal Mean") +
+  theme_void() +
+  theme(
+    axis.title.y = element_text(angle = 90, size = 14, vjust = 0.5),
+    plot.margin = margin(0, 0, 0, 0),
+    plot.title = element_text(face= "bold"))
+
+blank <- ggplot() + theme_void()
+# Forest structure panels
+forest_panels <- (Pstandheight | Punderstoryheight | Pbasalarea) /
+                 (Pcanopya     | Pcanopyp          | Pcanopy) /
+                 (Pseedling    | PSapling          | Pmortalitya)/
+                 (Pmortalityp  | Pmortality        | blank)
+# X-axis label panel
+x_axis_plot <- ggplot() +
+  annotate("text", x = 1, y = 1, label = "Burn Status", size = 5) +
+  theme_void() +
+  theme(
+    plot.margin = margin(0, 0, 0, 0),
+    plot.title = element_text(face = "bold"))
+
+# Combine
+ForestStructure_plot <- (y_axis_plot | (forest_panels / x_axis_plot)) + 
+  plot_layout(widths = c(0.05, 1), heights = c(1, 0.02), 
+              guides = "collect")+ 
+  theme(plot.margin = margin(0, -5, 0, 0))
+ForestStructure_plot
+```
